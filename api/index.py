@@ -7,8 +7,10 @@ Architecture:
 
 import logging
 import time
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from api.config import MOCK_MODE, ERROR_MESSAGE
@@ -220,3 +222,9 @@ async def simli_config():
     if not SIMLI_API_KEY:
         return {"error": "Simli not configured"}
     return {"apiKey": SIMLI_API_KEY, "faceId": SIMLI_FACE_ID}
+
+
+# Mount static frontend (serve public/ directory)
+public_dir = os.path.join(os.path.dirname(__file__), "..", "public")
+if os.path.isdir(public_dir):
+    app.mount("/", StaticFiles(directory=public_dir, html=True), name="static")
