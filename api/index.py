@@ -124,13 +124,28 @@ async def _call_gemini(user_message: str) -> str:
                 f"The user asked: \"{user_message}\""
             )
 
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=prompt,
-            config={"temperature": 0.7, "max_output_tokens": 200},
-        )
+        # Try multiple models in case of rate limits
+        model_order = [LLM_MODEL, "gemini-2.5-flash", "gemini-flash-latest"]
+        last_error = None
+        for model in model_order:
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config={"temperature": 0.7, "max_output_tokens": 200},
+                )
+                text = (response.text or "").strip()
+                if text:
+                    logger.info("LLM success with model: %s", model)
+                    return text
+            except Exception as e:
+                last_error = e
+                logger.warning("Model %s failed: %s", model, str(e)[:100])
+                if "429" not in str(e):
+                    break  # Don't retry on non-rate-limit errors
 
-        return (response.text or "").strip() or "Sorry, I didn't catch that. Could you try again?"
+        logger.error("All LLM models failed. Last error: %s", last_error)
+        return "I'm having trouble connecting to my brain right now. Please try again in a moment."
 
     except Exception as e:
         logger.error("Gemini call error: %s", e)
