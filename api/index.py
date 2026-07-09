@@ -370,14 +370,14 @@ async function initSimli() {
         document.getElementById('avatarStatus').textContent = 'Starting avatar...';
 
         // Step 1: Get ICE servers
-        var iceResp = await fetch('https://api.simli.com/compose/ice', {
+        var iceResp = await fetch('https://api.simli.ai/compose/ice', {
             headers: { 'x-simli-api-key': cfg.apiKey }
         });
         if (!iceResp.ok) throw new Error('ICE servers failed');
         var iceServers = await iceResp.json();
 
         // Step 2: Get session token
-        var tokenResp = await fetch('https://api.simli.com/compose/token', {
+        var tokenResp = await fetch('https://api.simli.ai/compose/token', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -418,7 +418,7 @@ async function initSimli() {
         };
 
         // Step 4: Open WebSocket for signaling
-        var wsUrl = 'wss://api.simli.com/compose/webrtc/p2p?session_token=' +
+        var wsUrl = 'wss://api.simli.ai/compose/webrtc/p2p?session_token=' +
             tokenData.session_token + '&enableSFU=true';
         simliWS = new WebSocket(wsUrl);
 

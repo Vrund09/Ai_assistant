@@ -265,13 +265,13 @@ async function initSimli() {
 async function prewarmSimli(config) {
     try {
         // 1. Get ICE servers
-        var iceResp = await fetch('https://api.simli.com/compose/ice', {
+        var iceResp = await fetch('https://api.simli.ai/compose/ice', {
             headers: { 'x-simli-api-key': config.apiKey }
         });
         var iceServers = await iceResp.json();
 
         // 2. Get session token
-        var tokenResp = await fetch('https://api.simli.com/compose/token', {
+        var tokenResp = await fetch('https://api.simli.ai/compose/token', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -313,7 +313,7 @@ async function prewarmSimli(config) {
         };
 
         // 4. Open WebSocket for signaling
-        var wsUrl = 'wss://api.simli.com/compose/webrtc/p2p?session_token=' +
+        var wsUrl = 'wss://api.simli.ai/compose/webrtc/p2p?session_token=' +
             simliToken + '&enableSFU=true';
         simliWS = new WebSocket(wsUrl);
 
