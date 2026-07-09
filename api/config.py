@@ -19,7 +19,7 @@ SERPER_API_KEY: str = os.environ.get("SERPER_API_KEY", "")
 MOCK_MODE: bool = os.environ.get("MOCK_MODE", "false").lower() == "true"
 
 # Gemini model selection
-LLM_MODEL: str = "gemini-2.0-flash"
+LLM_MODEL: str = "gemini-2.5-flash"
 MODERATION_MODEL: str = "gemini-2.0-flash-lite"
 
 # Limits

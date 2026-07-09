@@ -6,7 +6,6 @@ Layer 3: Output text scan (final safety net)
 """
 
 import re
-import json
 import logging
 from dataclasses import dataclass
 
@@ -89,38 +88,12 @@ async def layer2_moderation(user_text: str) -> tuple[bool, str | None]:
         raw = (response.text or "").strip()
         logger.info("Layer 2 raw response: %s", raw)
 
-        # Try to extract valid JSON from response
-        import re as _re
-
-        verdict = "SAFE"
-        category = None
-
-        # First try: direct JSON parse
-        try:
-            result = json.loads(raw)
-            verdict = result.get("verdict", "SAFE")
-            category = result.get("category")
-        except (json.JSONDecodeError, ValueError):
-            # Second try: extract JSON from code block or raw text
-            json_match = _re.search(r'\{[^{}]*\}', raw)
-            if json_match:
-                try:
-                    result = json.loads(json_match.group(0))
-                    verdict = result.get("verdict", "SAFE")
-                    category = result.get("category")
-                except (json.JSONDecodeError, ValueError):
-                    pass
-
-        # Keyword fallback: if JSON parsing fails, check for obvious unsafe indicators
-        if verdict == "SAFE" and category is None:
-            lower = raw.lower()
-            if "unsafe" in lower:
-                verdict = "UNSAFE"
-                category = "detected"
-            elif "safe" in lower:
-                verdict = "SAFE"
-
-        if verdict == "UNSAFE":
+        # Just check if the response contains UNSAFE — no JSON parsing needed
+        if "UNSAFE" in raw:
+            # Try to extract category if present
+            import re as _re
+            cat_match = _re.search(r'"category"\s*:\s*"([^"]+)"', raw)
+            category = cat_match.group(1) if cat_match else "detected"
             logger.info("Layer 2 block — category: %s", category)
             return True, f"llm_unsafe:{category}"
 
