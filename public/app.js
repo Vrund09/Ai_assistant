@@ -202,13 +202,18 @@ function speakText(text) {
     var utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'en-US';
     utterance.rate = 1.0;
-    utterance.pitch = 1.0;
+    utterance.pitch = 1.1;
 
-    // Pick a good voice
+    // Pick a female voice
     var voices = window.speechSynthesis.getVoices();
     var preferred = voices.find(function (v) {
-        return v.name.includes('Google') && v.lang.startsWith('en');
-    }) || voices.find(function (v) {
+        var n = v.name.toLowerCase();
+        return n.includes('female') || n.includes('woman') || n.includes('zira') || n.includes('samantha') || n.includes('karen');
+    });
+    if (!preferred) preferred = voices.find(function (v) {
+        return v.lang.startsWith('en') && v.name.toLowerCase().includes('google');
+    });
+    if (!preferred) preferred = voices.find(function (v) {
         return v.lang.startsWith('en');
     });
     if (preferred) utterance.voice = preferred;
@@ -377,20 +382,49 @@ function stopSimli() {
     elements.avatarPlaceholder.classList.remove('hidden');
 }
 
-// Simli needs PCM audio. In a full integration, you'd use a TTS service
-// (ElevenLabs, Gemini TTS) to get PCM Int16 16kHz mono audio, then send it.
-async function speakWithSimli(text) {
-    if (!state.simliReady || !simliWS || simliWS.readyState !== WebSocket.OPEN) return;
+// Simli TTS pipeline — fetches PCM from Gemini TTS, pipes through WebRTC for lip-sync
+async function speakViaSimli(text) {
+    if (!text || state.isSpeaking || !simliWS || simliWS.readyState !== WebSocket.OPEN) {
+        // Fall back to browser TTS
+        speakText(text);
+        return;
+    }
+
+    state.isSpeaking = true;
+    setStatus('speaking', 'Speaking...');
+    animateMouth(true);
 
     try {
-        // Placeholder: in production, fetch PCM audio from a TTS API
-        // const audioResponse = await fetch(TTS_API_URL, { method:'POST', body: JSON.stringify({text}) });
-        // const pcmBuffer = await audioResponse.arrayBuffer();
-        // simliWS.send(new Uint8Array(pcmBuffer));
-        console.log('Simli would speak:', text.substring(0, 50));
-    } catch (e) {
-        console.error('Simli speak error:', e);
+        var resp = await fetch('/api/tts?text=' + encodeURIComponent(text) + '&voice=Puck');
+        if (!resp.ok) throw new Error('TTS failed: ' + resp.status);
+        var pcmBuffer = await resp.arrayBuffer();
+        if (!pcmBuffer || pcmBuffer.byteLength === 0) throw new Error('Empty audio');
+
+        // Pipe PCM through Simli WebRTC in chunks
+        var chunkSize = 6000;
+        var uint8 = new Uint8Array(pcmBuffer);
+        for (var i = 0; i < uint8.length; i += chunkSize) {
+            if (simliWS && simliWS.readyState === WebSocket.OPEN) {
+                simliWS.send(uint8.slice(i, i + chunkSize));
+            }
+            await new Promise(function(r) { setTimeout(r, 20); });
+        }
+
+        setTimeout(function() {
+            state.isSpeaking = false;
+            animateMouth(false);
+            setStatus('idle', 'Waiting for your question...');
+        }, 500);
+    } catch(e) {
+        console.log('Simli TTS failed, falling back to browser:', e);
+        state.isSpeaking = false;
+        animateMouth(false);
+        speakText(text);
     }
+}
+
+async function speakWithSimli(text) {
+    return speakViaSimli(text);
 }
 
 // =========================================================================
@@ -426,11 +460,11 @@ async function sendMessage(message) {
             speakText(data.reply);
             showToast('Message blocked by safety filter', 'error');
         } else {
-            // Speak the answer through the avatar
-            speakText(data.reply);
-            // If Simli is ready, also send to it (full integration needs TTS PCM audio)
-            if (state.simliReady) {
-                speakWithSimli(data.reply);
+            // Try Simli TTS pipeline first (lip-sync via WebRTC), fall back to browser
+            if (state.simliReady && simliWS && simliWS.readyState === WebSocket.OPEN) {
+                speakViaSimli(data.reply);
+            } else {
+                speakText(data.reply);
             }
         }
 

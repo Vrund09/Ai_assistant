@@ -256,6 +256,27 @@ async def simli_config():
     return {"apiKey": SIMLI_API_KEY, "faceId": SIMLI_FACE_ID}
 
 
+@app.get("/api/tts")
+async def tts_endpoint(text: str = "", voice: str = "Puck"):
+    """Generate PCM 16kHz mono audio from text using Gemini TTS.
+
+    Returns raw PCM bytes for direct piping into Simli WebRTC.
+    Voice options (female): Puck, Kore, Leda, Aoede, Autonoe, Callirrhoe
+    """
+    from fastapi.responses import Response
+
+    if not text or not text.strip():
+        return {"error": "No text provided"}
+
+    from api.tts import generate_pcm
+
+    pcm = await generate_pcm(text.strip(), voice)
+    if pcm is None:
+        return {"error": "TTS generation failed"}
+
+    return Response(content=pcm, media_type="audio/pcm")
+
+
 # Mount static frontend (serve public/ directory)
 public_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "public")
 if os.path.isdir(public_dir):
@@ -525,6 +546,12 @@ function animateMouth(speaking) {
     }
 }
 
+// Load voices
+if (window.speechSynthesis) {
+    window.speechSynthesis.getVoices();
+    window.speechSynthesis.onvoiceschanged = function() { window.speechSynthesis.getVoices(); };
+}
+
 function speak(text) {
     if (!text || isSpeaking) return;
     window.speechSynthesis.cancel();
@@ -534,6 +561,13 @@ function speak(text) {
     var u = new SpeechSynthesisUtterance(text);
     u.lang = 'en-US';
     u.rate = 1.0;
+    u.pitch = 1.1;
+    // Pick female voice
+    var voices = window.speechSynthesis.getVoices();
+    var female = voices.find(function(v){ return v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('woman') || v.name.includes('Zira') || v.name.includes('Samantha') || v.name.includes('Karen'); });
+    if (!female) female = voices.find(function(v){ return v.lang.startsWith('en') && v.name.toLowerCase().includes('google'); });
+    if (!female) female = voices.find(function(v){ return v.lang.startsWith('en'); });
+    if (female) u.voice = female;
     u.onend = function() { isSpeaking = false; animateMouth(false); setStatus('idle', 'Waiting...'); };
     u.onerror = function() { isSpeaking = false; animateMouth(false); setStatus('idle', 'Waiting...'); };
     window.speechSynthesis.speak(u);
@@ -550,14 +584,82 @@ async function send() {
         var d = await r.json();
         var cls = d.blocked ? 'assistant blocked' : 'assistant';
         addMsg(d.reply, cls);
-        speak(d.reply);
         if (d.blocked) {
+            // Use browser TTS for refusal messages
+            speakBrowser(d.reply);
             var tst = document.createElement('div'); tst.className = 'toast'; tst.textContent = 'Blocked by safety filter'; document.body.appendChild(tst);
             setTimeout(function(){ tst.remove(); }, 4000);
+        } else {
+            // Try Simli TTS pipeline first, fall back to browser
+            if (simliReady && simliWS && simliWS.readyState === WebSocket.OPEN) {
+                speakSimli(d.reply);
+            } else {
+                speakBrowser(d.reply);
+            }
         }
     } catch(e) {
         addMsg("Sorry, couldn't get an answer.", 'assistant');
         setStatus('idle', 'Waiting...');
+    }
+}
+
+// Browser TTS (fallback) — female voice
+function speakBrowser(text) {
+    if (!text || isSpeaking) return;
+    window.speechSynthesis.cancel();
+    isSpeaking = true;
+    setStatus('speaking', 'Speaking...');
+    animateMouth(true);
+    var u = new SpeechSynthesisUtterance(text);
+    u.lang = 'en-US';
+    u.rate = 1.0;
+    u.pitch = 1.1;
+    var voices = window.speechSynthesis.getVoices();
+    var female = voices.find(function(v){ var n = v.name.toLowerCase(); return n.includes('female') || n.includes('zira') || n.includes('samantha') || n.includes('karen'); });
+    if (!female) female = voices.find(function(v){ return v.lang.startsWith('en'); });
+    if (female) u.voice = female;
+    u.onend = function() { isSpeaking = false; animateMouth(false); setStatus('idle', 'Waiting...'); };
+    u.onerror = function() { isSpeaking = false; animateMouth(false); setStatus('idle', 'Waiting...'); };
+    window.speechSynthesis.speak(u);
+}
+
+// Simli TTS pipeline — fetches PCM from Gemini TTS, pipes through WebRTC for lip-sync
+async function speakSimli(text) {
+    if (!text || isSpeaking) return;
+    isSpeaking = true;
+    setStatus('speaking', 'Speaking...');
+    animateMouth(true);
+    try {
+        // Fetch PCM audio from our TTS endpoint
+        var resp = await fetch('/api/tts?text=' + encodeURIComponent(text) + '&voice=Puck');
+        if (!resp.ok) throw new Error('TTS failed: ' + resp.status);
+        var pcmBuffer = await resp.arrayBuffer();
+        if (!pcmBuffer || pcmBuffer.byteLength === 0) throw new Error('Empty audio');
+
+        // Send PCM through Simli WebRTC in chunks
+        var chunkSize = 6000;
+        var uint8 = new Uint8Array(pcmBuffer);
+        for (var i = 0; i < uint8.length; i += chunkSize) {
+            if (simliWS && simliWS.readyState === WebSocket.OPEN) {
+                simliWS.send(uint8.slice(i, i + chunkSize));
+            }
+            // Small delay between chunks for smooth playback
+            await new Promise(function(r) { setTimeout(r, 20); });
+        }
+
+        // Let the last audio finish playing
+        setTimeout(function() {
+            isSpeaking = false;
+            animateMouth(false);
+            setStatus('idle', 'Waiting...');
+        }, 500);
+    } catch(e) {
+        console.log('Simli speak failed, falling back to browser:', e);
+        window.speechSynthesis.cancel();
+        isSpeaking = false;
+        animateMouth(false);
+        // Fall back to browser TTS
+        speakBrowser(text);
     }
 }
 
