@@ -39,35 +39,45 @@ class ChatResponse(BaseModel):
     latency_ms: float | None = None
 
 
+from google.genai.types import Tool, FunctionDeclaration, Schema, Type
+
 TOOLS = [
-    {
-        "name": "get_weather",
-        "description": "Get current weather for a city.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "city": {
-                    "type": "string",
-                    "description": "City name, e.g. 'Hyderabad' or 'New York'.",
-                }
-            },
-            "required": ["city"],
-        },
-    },
-    {
-        "name": "web_search",
-        "description": "Search the web for current information.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query.",
-                }
-            },
-            "required": ["query"],
-        },
-    },
+    Tool(
+        function_declarations=[
+            FunctionDeclaration(
+                name="get_weather",
+                description="Get current weather for a city.",
+                parameters=Schema(
+                    type=Type.OBJECT,
+                    properties={
+                        "city": Schema(
+                            type=Type.STRING,
+                            description="City name, e.g. 'Hyderabad' or 'New York'.",
+                        )
+                    },
+                    required=["city"],
+                ),
+            ),
+        ]
+    ),
+    Tool(
+        function_declarations=[
+            FunctionDeclaration(
+                name="web_search",
+                description="Search the web for current information.",
+                parameters=Schema(
+                    type=Type.OBJECT,
+                    properties={
+                        "query": Schema(
+                            type=Type.STRING,
+                            description="The search query.",
+                        )
+                    },
+                    required=["query"],
+                ),
+            ),
+        ]
+    ),
 ]
 
 SYSTEM_PROMPT = """You are a helpful voice assistant. You speak answers aloud through an avatar.
@@ -135,6 +145,8 @@ async def _call_gemini(user_message: str) -> str:
         if not GEMINI_API_KEY:
             return "I'm not configured with an API key yet. Please set GEMINI_API_KEY."
 
+        from google.genai.types import Content, Part, FunctionResponse
+
         client = genai.Client(api_key=GEMINI_API_KEY)
 
         response = client.models.generate_content(
@@ -167,22 +179,20 @@ async def _call_gemini(user_message: str) -> str:
                     follow_up = client.models.generate_content(
                         model=LLM_MODEL,
                         contents=[
-                            {"role": "user", "parts": [{"text": user_message}]},
-                            {
-                                "role": "model",
-                                "parts": [{"function_call": {"name": func_name, "args": args}}],
-                            },
-                            {
-                                "role": "user",
-                                "parts": [
-                                    {
-                                        "function_response": {
-                                            "name": func_name,
-                                            "response": {"result": tool_result},
-                                        }
-                                    }
+                            Content(role="user", parts=[Part.from_text(text=user_message)]),
+                            Content(
+                                role="model",
+                                parts=[Part.from_function_call(name=func_name, args=args)],
+                            ),
+                            Content(
+                                role="user",
+                                parts=[
+                                    Part.from_function_response(
+                                        name=func_name,
+                                        response={"result": tool_result},
+                                    )
                                 ],
-                            },
+                            ),
                         ],
                         config={
                             "system_instruction": SYSTEM_PROMPT,

@@ -20,7 +20,7 @@ MOCK_MODE: bool = os.environ.get("MOCK_MODE", "false").lower() == "true"
 
 # Gemini model selection
 LLM_MODEL: str = "gemini-2.5-flash"
-MODERATION_MODEL: str = "gemini-2.5-flash-lite"
+MODERATION_MODEL: str = "gemini-2.0-flash-lite"
 
 # Limits
 MAX_ANSWER_SENTENCES: int = 2

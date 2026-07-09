@@ -87,7 +87,14 @@ async def layer2_moderation(user_text: str) -> tuple[bool, str | None]:
             config={"temperature": 0, "max_output_tokens": 50},
         )
         text = response.text.strip()
-        text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        logger.info("Layer 2 raw response: %s", text)
+
+        # Try to extract JSON from various formats
+        import re as _re
+        json_match = _re.search(r'\{.*\}', text, _re.DOTALL)
+        if json_match:
+            text = json_match.group(0)
+
         result = json.loads(text)
         verdict = result.get("verdict", "SAFE")
         category = result.get("category", "unknown")
