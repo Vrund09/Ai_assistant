@@ -125,7 +125,7 @@ async def _call_gemini(user_message: str) -> str:
             )
 
         # Try multiple models in case of rate limits
-        model_order = [LLM_MODEL, "gemini-2.5-flash", "gemini-flash-latest"]
+        model_order = [LLM_MODEL, "gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-flash-latest"]
         last_error = None
         for model in model_order:
             try:
