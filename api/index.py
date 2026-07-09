@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from api.config import MOCK_MODE, ERROR_MESSAGE
 from api.guardrails import run_guardrail_pipeline, layer3_output_scan
-from api.tools import get_weather, web_search, format_weather_answer
+from api.tools import get_weather, web_search
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("api")
@@ -39,59 +39,6 @@ class ChatResponse(BaseModel):
     blocked: bool = False
     block_reason: str | None = None
     latency_ms: float | None = None
-
-
-from google.genai.types import Tool, FunctionDeclaration, Schema, Type
-
-TOOLS = [
-    Tool(
-        function_declarations=[
-            FunctionDeclaration(
-                name="get_weather",
-                description="Get current weather for a city.",
-                parameters=Schema(
-                    type=Type.OBJECT,
-                    properties={
-                        "city": Schema(
-                            type=Type.STRING,
-                            description="City name, e.g. 'Hyderabad' or 'New York'.",
-                        )
-                    },
-                    required=["city"],
-                ),
-            ),
-        ]
-    ),
-    Tool(
-        function_declarations=[
-            FunctionDeclaration(
-                name="web_search",
-                description="Search the web for current information.",
-                parameters=Schema(
-                    type=Type.OBJECT,
-                    properties={
-                        "query": Schema(
-                            type=Type.STRING,
-                            description="The search query.",
-                        )
-                    },
-                    required=["query"],
-                ),
-            ),
-        ]
-    ),
-]
-
-SYSTEM_PROMPT = """You are a helpful voice assistant. You speak answers aloud through an avatar.
-
-Rules:
-- Answer in 1-2 short sentences, natural spoken style.
-- No markdown, no lists, no formatting — plain spoken English.
-- Use the get_weather tool when the user asks about weather.
-- Use the web_search tool for general knowledge questions.
-- If a tool fails, apologize briefly and suggest trying again.
-- Never guess weather data — always use the tool.
-- Be warm and friendly, like a human assistant."""
 
 
 @app.post("/api/chat")
@@ -135,7 +82,7 @@ async def chat(request: ChatRequest):
 
 
 async def _call_gemini(user_message: str) -> str:
-    """Call Gemini with function calling, or return mock answer."""
+    """Call Gemini with simple prompt + pre-fetched weather context."""
     if MOCK_MODE:
         logger.info("MOCK_MODE: returning canned answer")
         return "The weather in Hyderabad is currently 32 degrees with clear skies."
@@ -147,100 +94,64 @@ async def _call_gemini(user_message: str) -> str:
         if not GEMINI_API_KEY:
             return "I'm not configured with an API key yet. Please set GEMINI_API_KEY."
 
-        from google.genai.types import Content, Part
-
         client = genai.Client(api_key=GEMINI_API_KEY)
 
-        # Use the richer generate_content with automatic function calling
+        # Check if this is a weather query and pre-fetch data
+        weather_context = ""
+        msg_lower = user_message.lower()
+        if any(w in msg_lower for w in ["weather", "temperature", "rain", "sunny", "cloud", "forecast", "humidity", "wind"]):
+            city = _extract_city(user_message)
+            if city:
+                weather = await get_weather(city)
+                if weather.success:
+                    temp = f"{weather.temperature:.0f}" if weather.temperature else "unknown"
+                    weather_context = f"Weather for {weather.city}: {temp}°C, {weather.condition}, humidity {weather.humidity}%, wind {weather.wind_speed} km/h."
+                else:
+                    weather_context = str(weather.error)
+
+        if weather_context:
+            prompt = (
+                f"You are a warm, friendly voice assistant. Answer in 1-2 short sentences, natural spoken style. "
+                f"No markdown.\n\n"
+                f"Current weather data: {weather_context}\n\n"
+                f"The user asked: \"{user_message}\"\n"
+                f"Include the weather data naturally in your answer."
+            )
+        else:
+            prompt = (
+                f"You are a warm, friendly voice assistant. Answer in 1-2 short sentences, natural spoken style. "
+                f"No markdown.\n\n"
+                f"The user asked: \"{user_message}\""
+            )
+
         response = client.models.generate_content(
             model=LLM_MODEL,
-            contents=user_message,
-            config={
-                "system_instruction": SYSTEM_PROMPT,
-                "tools": TOOLS,
-                "temperature": 0.7,
-                "max_output_tokens": 200,
-            },
+            contents=prompt,
+            config={"temperature": 0.7, "max_output_tokens": 200},
         )
 
-        result_text = None
-
-        # Check each part in the response
-        if response.candidates and response.candidates[0].content:
-            parts = response.candidates[0].content.parts
-            if parts:
-                for part in parts:
-                    # Case 1: Function call requested
-                    if hasattr(part, "function_call") and part.function_call:
-                        func_name = part.function_call.name
-                        args = dict(part.function_call.args or {})
-
-                        logger.info("Gemini calling tool: %s(%s)", func_name, args)
-
-                        if func_name == "get_weather":
-                            weather = await get_weather(**args)
-                            tool_result = format_weather_answer(weather)
-                        elif func_name == "web_search":
-                            tool_result = await web_search(**args)
-                        else:
-                            tool_result = f"Unknown tool: {func_name}"
-
-                        # Send tool result back for final answer
-                        follow_up = client.models.generate_content(
-                            model=LLM_MODEL,
-                            contents=[
-                                Content(
-                                    role="user",
-                                    parts=[Part.from_text(text=user_message)],
-                                ),
-                                Content(
-                                    role="model",
-                                    parts=[
-                                        Part.from_function_call(
-                                            name=func_name, args=args
-                                        )
-                                    ],
-                                ),
-                                Content(
-                                    role="user",
-                                    parts=[
-                                        Part.from_function_response(
-                                            name=func_name,
-                                            response={"result": tool_result},
-                                        )
-                                    ],
-                                ),
-                            ],
-                            config={
-                                "system_instruction": SYSTEM_PROMPT,
-                                "temperature": 0.7,
-                                "max_output_tokens": 200,
-                            },
-                        )
-                        result_text = (follow_up.text or "").strip()
-                        if result_text:
-                            return result_text
-
-                    # Case 2: Text response
-                    if hasattr(part, "text") and part.text:
-                        result_text = part.text.strip()
-                        if result_text:
-                            return result_text
-
-        # Fallback: try response.text
-        if response.text:
-            return response.text.strip()
-
-        # If we got here, the response was empty or blocked
-        logger.warning(
-            "Empty Gemini response. Finish reason: %s",
-            response.candidates[0].finish_reason if response.candidates else "no candidates",
-        )
-        return "I didn't get a response. Could you try asking again?"
+        return (response.text or "").strip() or "Sorry, I didn't catch that. Could you try again?"
 
     except Exception as e:
         logger.error("Gemini call error: %s", e)
         return ERROR_MESSAGE
+
+
+def _extract_city(text: str) -> str | None:
+    """Extract city name from a weather query."""
+    import re
+    patterns = [
+        r"weather\s+(?:in|for|at)\s+([A-Za-z\s]+?)(?:\?|$|\.|\s+(?:today|tomorrow|now|right|is))",
+        r"(?:what(?:'s| is| are).*?weather)\s+(?:in|for|at)\s+([A-Za-z\s]+?)(?:\?|$|\.)",
+        r"(?:in|for|at)\s+([A-Za-z\s]+?)(?:\?|$|\.|,)\s*(?:what|how|tell)",
+    ]
+    for p in patterns:
+        m = re.search(p, text, re.IGNORECASE)
+        if m:
+            city = m.group(1).strip()
+            if len(city) > 2 and len(city) < 50:
+                return city
+    return None
 
 
 @app.get("/api/health")
