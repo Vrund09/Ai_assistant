@@ -20,7 +20,7 @@ from api.tools import get_weather, web_search
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("api")
 
-app = FastAPI(title="Voice Avatar Assistant", version="0.1.0")
+app = FastAPI(title="Voice Avatar Assistant", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
