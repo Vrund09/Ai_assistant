@@ -147,10 +147,11 @@ async def _call_gemini(user_message: str) -> str:
         if not GEMINI_API_KEY:
             return "I'm not configured with an API key yet. Please set GEMINI_API_KEY."
 
-        from google.genai.types import Content, Part, FunctionResponse
+        from google.genai.types import Content, Part
 
         client = genai.Client(api_key=GEMINI_API_KEY)
 
+        # Use the richer generate_content with automatic function calling
         response = client.models.generate_content(
             model=LLM_MODEL,
             contents=user_message,
@@ -162,49 +163,80 @@ async def _call_gemini(user_message: str) -> str:
             },
         )
 
-        if response.candidates and response.candidates[0].content.parts:
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, "function_call") and part.function_call:
-                    func_name = part.function_call.name
-                    args = dict(part.function_call.args)
+        result_text = None
 
-                    logger.info("Gemini calling tool: %s(%s)", func_name, args)
+        # Check each part in the response
+        if response.candidates and response.candidates[0].content:
+            parts = response.candidates[0].content.parts
+            if parts:
+                for part in parts:
+                    # Case 1: Function call requested
+                    if hasattr(part, "function_call") and part.function_call:
+                        func_name = part.function_call.name
+                        args = dict(part.function_call.args or {})
 
-                    if func_name == "get_weather":
-                        weather = await get_weather(**args)
-                        tool_result = format_weather_answer(weather)
-                    elif func_name == "web_search":
-                        tool_result = await web_search(**args)
-                    else:
-                        tool_result = f"Unknown tool: {func_name}"
+                        logger.info("Gemini calling tool: %s(%s)", func_name, args)
 
-                    follow_up = client.models.generate_content(
-                        model=LLM_MODEL,
-                        contents=[
-                            Content(role="user", parts=[Part.from_text(text=user_message)]),
-                            Content(
-                                role="model",
-                                parts=[Part.from_function_call(name=func_name, args=args)],
-                            ),
-                            Content(
-                                role="user",
-                                parts=[
-                                    Part.from_function_response(
-                                        name=func_name,
-                                        response={"result": tool_result},
-                                    )
-                                ],
-                            ),
-                        ],
-                        config={
-                            "system_instruction": SYSTEM_PROMPT,
-                            "temperature": 0.7,
-                            "max_output_tokens": 200,
-                        },
-                    )
-                    return follow_up.text.strip()
+                        if func_name == "get_weather":
+                            weather = await get_weather(**args)
+                            tool_result = format_weather_answer(weather)
+                        elif func_name == "web_search":
+                            tool_result = await web_search(**args)
+                        else:
+                            tool_result = f"Unknown tool: {func_name}"
 
-        return response.text.strip()
+                        # Send tool result back for final answer
+                        follow_up = client.models.generate_content(
+                            model=LLM_MODEL,
+                            contents=[
+                                Content(
+                                    role="user",
+                                    parts=[Part.from_text(text=user_message)],
+                                ),
+                                Content(
+                                    role="model",
+                                    parts=[
+                                        Part.from_function_call(
+                                            name=func_name, args=args
+                                        )
+                                    ],
+                                ),
+                                Content(
+                                    role="user",
+                                    parts=[
+                                        Part.from_function_response(
+                                            name=func_name,
+                                            response={"result": tool_result},
+                                        )
+                                    ],
+                                ),
+                            ],
+                            config={
+                                "system_instruction": SYSTEM_PROMPT,
+                                "temperature": 0.7,
+                                "max_output_tokens": 200,
+                            },
+                        )
+                        result_text = (follow_up.text or "").strip()
+                        if result_text:
+                            return result_text
+
+                    # Case 2: Text response
+                    if hasattr(part, "text") and part.text:
+                        result_text = part.text.strip()
+                        if result_text:
+                            return result_text
+
+        # Fallback: try response.text
+        if response.text:
+            return response.text.strip()
+
+        # If we got here, the response was empty or blocked
+        logger.warning(
+            "Empty Gemini response. Finish reason: %s",
+            response.candidates[0].finish_reason if response.candidates else "no candidates",
+        )
+        return "I didn't get a response. Could you try asking again?"
 
     except Exception as e:
         logger.error("Gemini call error: %s", e)
