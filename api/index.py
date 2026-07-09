@@ -225,6 +225,38 @@ async def simli_config():
 
 
 # Mount static frontend (serve public/ directory)
-public_dir = os.path.join(os.path.dirname(__file__), "..", "public")
+public_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "public")
 if os.path.isdir(public_dir):
     app.mount("/", StaticFiles(directory=public_dir, html=True), name="static")
+else:
+    # Fallback: serve index.html inline if public/ directory not found
+    import pathlib
+    _pf = pathlib.Path(__file__).parent / ".." / "public"
+    logger.warning("public/ directory not found at %s, trying %s", public_dir, _pf.resolve())
+    if _pf.is_dir():
+        app.mount("/", StaticFiles(directory=str(_pf.resolve()), html=True), name="static")
+    else:
+        # Last resort: serve inline HTML
+        @app.get("/")
+        async def root():
+            from fastapi.responses import HTMLResponse
+            return HTMLResponse(content="""
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Voice Avatar Assistant</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>">
+<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0f0f13;color:#e4e4e7;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;padding:16px}.container{max-width:600px;width:100%;text-align:center}h1{font-size:1.5rem}p{color:#71717a;font-size:.875rem}.status{background:#1a1a24;border:1px solid #2a2a3a;border-radius:12px;padding:20px;margin:20px 0}.status code{color:#7c3aed}input[type=text]{width:100%;padding:12px 16px;background:#1a1a24;border:1px solid #2a2a3a;border-radius:12px;color:#e4e4e7;font-size:.9375rem;margin-top:12px}button{padding:12px 24px;background:#7c3aed;color:white;border:none;border-radius:12px;font-size:.9375rem;cursor:pointer;margin-top:8px}</style></head>
+<body><div class="container">
+<h1>Voice Avatar Assistant</h1><p>Ask me anything — I'll speak the answer</p>
+<div class="status"><p>Status: <code id="status">Connecting...</code></p></div>
+<input type="text" id="msg" placeholder="Type your question here..." maxlength="500">
+<button onclick="send()">Send</button>
+<div id="reply" style="margin-top:16px;font-size:.875rem;color:#71717a"></div>
+<script>
+async function send(){const m=document.getElementById('msg').value.trim();if(!m)return;document.getElementById('status').textContent='Thinking...';
+const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})});
+const d=await r.json();document.getElementById('reply').textContent=d.reply;document.getElementById('status').textContent='Ready';}
+fetch('/api/health').then(r=>r.json()).then(d=>{document.getElementById('status').textContent=d.mock_mode?'MOCK MODE':'Live ('+d.status+')';});
+</script></div></body></html>""")
+
