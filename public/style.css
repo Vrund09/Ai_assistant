@@ -78,17 +78,27 @@ header h1 {
 .avatar-placeholder.hidden {
     opacity: 0;
     pointer-events: none;
+    position: absolute;
+    inset: 0;
 }
 
 .avatar-face {
     font-size: 4rem;
     line-height: 1;
-    animation: pulse 2s ease-in-out infinite;
 }
 
 .avatar-status {
-    font-size: 0.875rem;
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(26, 26, 36, 0.85);
+    padding: 4px 14px;
+    border-radius: 20px;
+    font-size: 0.8rem;
     color: var(--text-muted);
+    z-index: 2;
+    pointer-events: none;
 }
 
 .avatar-video {

@@ -272,23 +272,197 @@ else:
         @app.get("/")
         async def root():
             from fastapi.responses import HTMLResponse
-            return HTMLResponse(content="""
-<!DOCTYPE html>
+            return HTMLResponse(content=r"""<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Voice Avatar Assistant</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>">
-<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0f0f13;color:#e4e4e7;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;padding:16px}.container{max-width:600px;width:100%;text-align:center}h1{font-size:1.5rem}p{color:#71717a;font-size:.875rem}.status{background:#1a1a24;border:1px solid #2a2a3a;border-radius:12px;padding:20px;margin:20px 0}.status code{color:#7c3aed}input[type=text]{width:100%;padding:12px 16px;background:#1a1a24;border:1px solid #2a2a3a;border-radius:12px;color:#e4e4e7;font-size:.9375rem;margin-top:12px}button{padding:12px 24px;background:#7c3aed;color:white;border:none;border-radius:12px;font-size:.9375rem;cursor:pointer;margin-top:8px}</style></head>
-<body><div class="container">
-<h1>Voice Avatar Assistant</h1><p>Ask me anything — I'll speak the answer</p>
-<div class="status"><p>Status: <code id="status">Connecting...</code></p></div>
-<input type="text" id="msg" placeholder="Type your question here..." maxlength="500">
-<button onclick="send()">Send</button>
-<div id="reply" style="margin-top:16px;font-size:.875rem;color:#71717a"></div>
+<style>
+:root{--bg:#0f0f13;--surface:#1a1a24;--border:#2a2a3a;--text:#e4e4e7;--text-muted:#71717a;--accent:#7c3aed;--accent-glow:rgba(124,58,237,.3);--danger:#ef4444;--success:#22c55e;--radius:12px}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;justify-content:center;align-items:center;padding:16px}
+.container{width:100%;max-width:600px;display:flex;flex-direction:column;gap:16px}
+h1{font-size:1.5rem;text-align:center}
+.subtitle{color:var(--text-muted);font-size:.875rem;text-align:center}
+.avatar-container{position:relative;width:100%;aspect-ratio:4/3;background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);overflow:hidden;display:flex;align-items:center;justify-content:center}
+.avatar-container svg{position:absolute;top:0;left:0}
+.avatar-status{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);background:rgba(26,26,36,.85);padding:4px 14px;border-radius:20px;font-size:.8rem;color:var(--text-muted)}
+.status-bar{display:flex;align-items:center;gap:8px;padding:10px 16px;background:var(--surface);border-radius:var(--radius);border:1px solid var(--border)}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--text-muted);transition:background .2s}
+.status-dot.listening{background:var(--accent);animation:pulse 1s infinite}
+.status-dot.thinking{background:#f59e0b;animation:pulse .6s infinite}
+.status-dot.speaking{background:var(--success)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.status-text{font-size:.875rem;color:var(--text-muted)}
+.status-text.active{color:var(--text)}
+.conversation{display:flex;flex-direction:column;gap:8px;max-height:200px;overflow-y:auto}
+.message{padding:10px 14px;border-radius:var(--radius);font-size:.875rem;animation:fadeIn .3s}
+.message.user{background:var(--accent);color:#fff;align-self:flex-end;max-width:80%}
+.message.assistant{background:var(--surface);color:var(--text);align-self:flex-start;max-width:80%;border:1px solid var(--border)}
+.message.blocked{border-color:var(--danger);color:var(--danger)}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+.controls{margin-top:8px}
+input[type=text]{width:100%;padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.9375rem;outline:none}
+input[type=text]:focus{border-color:var(--accent)}
+input[type=text]::placeholder{color:var(--text-muted)}
+.btn-row{display:flex;gap:8px;margin-top:8px}
+.btn{padding:10px 20px;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);font-size:.9375rem;cursor:pointer}
+.btn:hover{opacity:.9}
+.btn-sec{background:var(--surface);border:1px solid var(--border);color:var(--text)}
+footer{text-align:center;color:var(--text-muted);font-size:.75rem;margin-top:8px}
+.toast{position:fixed;bottom:20px;right:20px;padding:12px 20px;border-radius:var(--radius);background:var(--surface);border:1px solid var(--danger);color:var(--danger);font-size:.875rem;z-index:1000;animation:fadeIn .3s}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>🎙️ Voice Avatar Assistant</h1>
+<p class="subtitle">Ask me anything — I'll speak the answer</p>
+
+<div class="avatar-container" id="avatarContainer">
+<svg id="faceSVG" viewBox="0 0 200 200" width="100%" height="100%">
+<circle cx="100" cy="100" r="80" fill="#2d2d3d" stroke="#7c3aed" stroke-width="2"/>
+<circle cx="75" cy="85" r="8" fill="#e4e4e7"/><circle cx="77" cy="85" r="4" fill="#0f0f13"/>
+<circle cx="125" cy="85" r="8" fill="#e4e4e7"/><circle cx="127" cy="85" r="4" fill="#0f0f13"/>
+<path id="mouth" d="M 75 130 Q 100 140 125 130" stroke="#e4e4e7" stroke-width="3" fill="none" stroke-linecap="round"/>
+</svg>
+<div class="avatar-status" id="avatarStatus">Ready</div>
+</div>
+
+<div class="status-bar">
+<span class="status-dot" id="statusDot"></span>
+<span class="status-text" id="statusText">Waiting for your question...</span>
+</div>
+
+<div class="conversation" id="conversation"></div>
+
+<div class="controls">
+<input type="text" id="msg" placeholder="Type your question here..." maxlength="500" autofocus>
+<div class="btn-row">
+<button class="btn" onclick="send()">Send</button>
+<button class="btn btn-sec" id="micBtn" onmousedown="startMic(event)" onmouseup="stopMic()" onmouseleave="stopMic()" ontouchstart="startMic(event)" ontouchend="stopMic()">🎤 Hold to talk</button>
+</div>
+</div>
+
+<footer>Gemini + Simli + Open-Meteo</footer>
+</div>
+
 <script>
-async function send(){const m=document.getElementById('msg').value.trim();if(!m)return;document.getElementById('status').textContent='Thinking...';
-const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})});
-const d=await r.json();document.getElementById('reply').textContent=d.reply;document.getElementById('status').textContent='Ready';}
-fetch('/api/health').then(r=>r.json()).then(d=>{document.getElementById('status').textContent=d.mock_mode?'MOCK MODE':'Live ('+d.status+')';});
-</script></div></body></html>""")
+var isSpeaking = false;
+var mouthAnim = false;
+var mouthFrame = null;
+var recognition = null;
+var speechReady = false;
+
+function setStatus(s, msg) {
+    var d = document.getElementById('statusDot');
+    var t = document.getElementById('statusText');
+    d.className = 'status-dot';
+    t.className = 'status-text';
+    if (s === 'thinking') { d.classList.add('thinking'); t.classList.add('active'); }
+    else if (s === 'speaking') { d.classList.add('speaking'); t.classList.add('active'); }
+    if (msg) t.textContent = msg;
+}
+
+function addMsg(text, role) {
+    var el = document.createElement('div');
+    el.className = 'message ' + role;
+    el.textContent = text;
+    var c = document.getElementById('conversation');
+    c.appendChild(el);
+    c.scrollTop = c.scrollHeight;
+}
+
+function animateMouth(speaking) {
+    var m = document.getElementById('mouth');
+    if (speaking && !mouthAnim) {
+        mouthAnim = true;
+        var intensity = 0, dir = 1;
+        (function pulse() {
+            if (!mouthAnim) return;
+            intensity += dir * 0.1;
+            if (intensity > 1) { intensity = 1; dir = -1; }
+            if (intensity < 0) { intensity = 0; dir = 1; }
+            var open = 8 + intensity * 13;
+            m.setAttribute('d', 'M 75 130 Q 100 ' + (130 + open) + ' 125 130');
+            mouthFrame = requestAnimationFrame(pulse);
+        })();
+    } else if (!speaking && mouthAnim) {
+        mouthAnim = false;
+        if (mouthFrame) cancelAnimationFrame(mouthFrame);
+        m.setAttribute('d', 'M 75 130 Q 100 140 125 130');
+    }
+}
+
+function speak(text) {
+    if (!text || isSpeaking) return;
+    window.speechSynthesis.cancel();
+    isSpeaking = true;
+    setStatus('speaking', 'Speaking...');
+    animateMouth(true);
+    var u = new SpeechSynthesisUtterance(text);
+    u.lang = 'en-US';
+    u.rate = 1.0;
+    u.onend = function() { isSpeaking = false; animateMouth(false); setStatus('idle', 'Waiting for your question...'); };
+    u.onerror = function() { isSpeaking = false; animateMouth(false); setStatus('idle', 'Waiting for your question...'); };
+    window.speechSynthesis.speak(u);
+}
+
+async function send() {
+    var m = document.getElementById('msg').value.trim();
+    if (!m || isSpeaking) return;
+    setStatus('thinking', 'Thinking...');
+    addMsg(m, 'user');
+    document.getElementById('msg').value = '';
+    try {
+        var r = await fetch('/api/chat', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})});
+        var d = await r.json();
+        var cls = d.blocked ? 'assistant blocked' : 'assistant';
+        addMsg(d.reply, cls);
+        speak(d.reply);
+        if (d.blocked) {
+            var toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.textContent = 'Message blocked by safety filter';
+            document.body.appendChild(toast);
+            setTimeout(function(){ toast.remove(); }, 4000);
+        }
+    } catch(e) {
+        addMsg("Sorry, couldn't get an answer. Please try again.", 'assistant');
+        setStatus('idle', 'Waiting for your question...');
+    }
+}
+
+document.getElementById('msg').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') send();
+});
+
+// Speech recognition
+var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SR) {
+    speechReady = true;
+    recognition = new SR();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+    recognition.onresult = function(e) {
+        var final = '';
+        for (var i = e.resultIndex; i < e.results.length; i++) {
+            if (e.results[i].isFinal) final += e.results[i][0].transcript;
+        }
+        if (final) { document.getElementById('msg').value = final; send(); stopMic(); }
+    };
+    recognition.onerror = function(e) {
+        if (e.error === 'not-allowed') alert('Microphone access denied. Enable it in browser settings.');
+        stopMic();
+    };
+}
+
+function startMic(e) { e.preventDefault(); if (speechReady) { try { recognition.start(); } catch(ex){} document.getElementById('micBtn').textContent = '🔴 Listening...'; document.getElementById('micBtn').style.background = 'var(--accent)'; document.getElementById('avatarStatus').textContent = 'Listening'; } }
+function stopMic() { if (speechReady) { try { recognition.stop(); } catch(ex){} } document.getElementById('micBtn').textContent = '🎤 Hold to talk'; document.getElementById('micBtn').style.background = ''; document.getElementById('avatarStatus').textContent = 'Ready'; }
+
+fetch('/api/health').then(function(r){ return r.json(); }).then(function(d){ document.getElementById('avatarStatus').textContent = d.mock_mode ? 'MOCK' : 'Ready'; });
+</script>
+</body>
+</html>""")
 
