@@ -171,12 +171,7 @@ def _extract_city(text: str) -> str | None:
 
 @app.get("/api/health")
 async def health():
-    from api.config import GEMINI_API_KEY
-    return {
-        "status": "ok",
-        "mock_mode": MOCK_MODE,
-        "key_prefix": GEMINI_API_KEY[:10] + "..." if GEMINI_API_KEY else "MISSING"
-    }
+    return {"status": "ok", "mock_mode": MOCK_MODE}
 
 
 @app.get("/api/simli-config")
