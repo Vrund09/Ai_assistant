@@ -184,13 +184,7 @@ def _extract_city(text: str) -> str | None:
 
 @app.get("/api/health")
 async def health():
-    from api.config import LLM_API_URL, LLM_MODEL
-    return {
-        "status": "ok",
-        "mock_mode": MOCK_MODE,
-        "llm_url": LLM_API_URL,
-        "llm_model": LLM_MODEL,
-    }
+    return {"status": "ok", "mock_mode": MOCK_MODE}
 
 
 @app.get("/api/simli-config")
