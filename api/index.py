@@ -303,6 +303,51 @@ video{background:var(--surface)}
 var simliPC = null;
 var simliWS = null;
 var simliReady = false;
+var simliReconnectTimer = null;
+var simliKeepaliveTimer = null;
+var simliReconnectAttempts = 0;
+var SIMLI_MAX_RECONNECTS = 6;
+
+// Keepalive: send silence every 15s so Simli's idle timer never drops the
+// session between questions during a demo.
+function startSimliKeepalive() {
+    if (simliKeepaliveTimer) clearInterval(simliKeepaliveTimer);
+    simliKeepaliveTimer = setInterval(function() {
+        if (isSpeaking) return;
+        if (simliWS && simliWS.readyState === WebSocket.OPEN) {
+            try { simliWS.send(new Uint8Array(2000)); } catch(e) {}
+        }
+    }, 15000);
+}
+
+function teardownSimli() {
+    if (simliKeepaliveTimer) { clearInterval(simliKeepaliveTimer); simliKeepaliveTimer = null; }
+    if (simliPC) { try { simliPC.oniceconnectionstatechange = null; simliPC.close(); } catch(e) {} simliPC = null; }
+    if (simliWS) { try { simliWS.onclose = null; simliWS.close(); } catch(e) {} simliWS = null; }
+    simliReady = false;
+    document.getElementById('simliVideo').classList.remove('show');
+    document.getElementById('faceSVG').classList.remove('hidden');
+}
+
+// Recover from a dropped session (idle STOP / WS close / ICE failure) instead
+// of falling back to voice-only permanently. Backoff + cap avoid a retry storm.
+function scheduleSimliReconnect(reason) {
+    if (simliReconnectTimer) return;
+    if (simliReconnectAttempts >= SIMLI_MAX_RECONNECTS) {
+        document.getElementById('avatarStatus').textContent = 'Voice only';
+        teardownSimli();
+        return;
+    }
+    simliReconnectAttempts++;
+    var delay = Math.min(1500 * simliReconnectAttempts, 10000);
+    console.log('Simli reconnect', simliReconnectAttempts, '(' + reason + ') in', delay, 'ms');
+    document.getElementById('avatarStatus').textContent = 'Reconnecting...';
+    teardownSimli();
+    simliReconnectTimer = setTimeout(function() {
+        simliReconnectTimer = null;
+        initSimli();
+    }, delay);
+}
 
 async function initSimli() {
     try {
@@ -348,16 +393,16 @@ async function initSimli() {
                 document.getElementById('faceSVG').classList.add('hidden');
                 document.getElementById('avatarStatus').textContent = 'Ready';
                 simliReady = true;
+                simliReconnectAttempts = 0;
                 console.log('Simli video connected');
             }
         });
 
         simliPC.oniceconnectionstatechange = function() {
-            console.log('ICE state:', simliPC.iceConnectionState);
-            if (simliPC.iceConnectionState === 'failed' || simliPC.iceConnectionState === 'disconnected') {
-                document.getElementById('faceSVG').classList.remove('hidden');
-                document.getElementById('simliVideo').classList.remove('show');
-                document.getElementById('avatarStatus').textContent = 'Reconnecting...';
+            var st = simliPC ? simliPC.iceConnectionState : '';
+            console.log('ICE state:', st);
+            if (st === 'failed' || st === 'disconnected' || st === 'closed') {
+                scheduleSimliReconnect('ice-' + st);
             }
         };
 
@@ -395,9 +440,10 @@ async function initSimli() {
                         simliWS.send(new Uint8Array(64000));
                     }
                 }, 100);
+                startSimliKeepalive();
                 return;
             }
-            if (evt.data === 'STOP') { return; }
+            if (evt.data === 'STOP') { scheduleSimliReconnect('server-stop'); return; }
             try {
                 var msg = JSON.parse(evt.data);
                 if (msg.type === 'answer' && msg.sdp && simliPC) {
@@ -409,7 +455,8 @@ async function initSimli() {
 
         simliWS.addEventListener('close', function() {
             console.log('Simli WS closed');
-            simliReady = false;
+            if (simliKeepaliveTimer) { clearInterval(simliKeepaliveTimer); simliKeepaliveTimer = null; }
+            scheduleSimliReconnect('ws-close');
         });
 
     } catch(e) {
@@ -516,6 +563,8 @@ async function send() {
             speakBrowser(d.reply);
             if (simliReady && simliWS && simliWS.readyState === WebSocket.OPEN) {
                 speakSimli(d.reply);
+            } else {
+                scheduleSimliReconnect('speak-not-ready');
             }
         }
     } catch(e) {
