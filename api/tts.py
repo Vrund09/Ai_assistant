@@ -1,89 +1,77 @@
-"""TTS via Google Gemini TTS REST API — no SDK, just httpx.
+"""TTS via edge-tts — free Microsoft Edge neural voices, no API key.
 
-Gemini TTS returns base64-encoded 24kHz PCM audio.
-We decode + resample to 16kHz mono for Simli WebRTC.
-Uses the GEMINI_API_KEY (Groq) — but falls back if it doesn't work.
+Produces PCM Int16 16kHz mono audio for Simli WebRTC lip-sync.
+edge-tts returns MP3 → pydub/ffmpeg converts to raw PCM.
 """
 
-import base64
+import io
 import logging
 import struct
-
-from api.config import GEMINI_API_KEY
+import subprocess
 
 logger = logging.getLogger("tts")
 
+# Female voices (for avatar)
+VOICES = {
+    "jenny": "en-US-JennyNeural",
+    "aria": "en-US-AriaNeural",
+    "neerja": "en-IN-NeerjaNeural",
+}
 
-async def generate_pcm(text: str, voice: str = "Puck") -> bytes | None:
-    """Generate PCM 16kHz mono Int16 audio using Google Gemini TTS REST API.
 
-    Free voices (female): Puck, Kore, Leda, Aoede.
-    Falls back gracefully if API key or network is unavailable.
+async def generate_pcm(text: str, voice: str = "en-US-JennyNeural") -> bytes | None:
+    """Generate PCM 16kHz mono Int16 audio for Simli WebRTC.
+
+    Uses Microsoft Edge TTS (free, no key, no quota).
+    Returns None → frontend falls back to browser TTS.
     """
-    if not GEMINI_API_KEY:
-        logger.warning("No API key for TTS")
-        return None
-
     try:
-        import httpx
+        import edge_tts
 
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent"
+        communicate = edge_tts.Communicate(text, voice)
 
-        body = {
-            "contents": [{"parts": [{"text": f"Speak this naturally: {text}"}]}],
-            "generationConfig": {
-                "responseModalities": ["AUDIO"],
-                "speechConfig": {
-                    "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}
-                },
-            },
-        }
+        mp3_data = bytearray()
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                mp3_data.extend(chunk["data"])
 
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(
-                f"{url}?key={GEMINI_API_KEY}",
-                json=body,
-                headers={"Content-Type": "application/json"},
-            )
-
-            if response.status_code != 200:
-                logger.error("TTS API %s: %s", response.status_code, response.text[:150])
-                return None
-
-            data = response.json()
-            candidates = data.get("candidates", [])
-            if not candidates:
-                return None
-
-            parts = candidates[0].get("content", {}).get("parts", [])
-            for part in parts:
-                if "inlineData" in part and part["inlineData"].get("mimeType") == "audio/pcm":
-                    audio_b64 = part["inlineData"]["data"]
-                    if audio_b64:
-                        raw_24khz = base64.b64decode(audio_b64)
-                        pcm_16khz = _resample_24k_to_16k(raw_24khz)
-                        logger.info("TTS: %d chars → %d bytes PCM", len(text), len(pcm_16khz))
-                        return pcm_16khz
-
+        if not mp3_data:
+            logger.warning("edge-tts returned empty audio")
             return None
+
+        pcm = _mp3_to_pcm16(bytes(mp3_data))
+        if pcm:
+            logger.info("TTS: %d chars → %d bytes PCM 16kHz", len(text), len(pcm))
+        return pcm
 
     except Exception as e:
         logger.error("TTS error: %s", e)
         return None
 
 
-def _resample_24k_to_16k(pcm: bytes) -> bytes:
-    """Resample 24kHz Int16 PCM → 16kHz Int16 PCM (simple linear interpolation)."""
-    samples = struct.unpack(f"<{len(pcm)//2}h", pcm)
-    ratio = 24000 / 16000
-    out_len = int(len(samples) / ratio)
-    out = bytearray()
-    for i in range(out_len):
-        src_idx = i * ratio
-        idx_lo = int(src_idx)
-        idx_hi = min(idx_lo + 1, len(samples) - 1)
-        frac = src_idx - idx_lo
-        val = int(samples[idx_lo] * (1 - frac) + samples[idx_hi] * frac)
-        val = max(-32768, min(32767, val))
-        out.extend(struct.pack("<h", val))
-    return bytes(out)
+def _mp3_to_pcm16(mp3_data: bytes) -> bytes | None:
+    """Convert MP3 → PCM Int16 16kHz mono.
+
+    Tries: pydub → ffmpeg CLI → None (browser TTS fallback).
+    """
+    # Strategy 1: pydub (works on Vercel Python 3.12)
+    try:
+        from pydub import AudioSegment
+        audio = AudioSegment.from_mp3(io.BytesIO(mp3_data))
+        audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+        return audio.raw_data
+    except Exception as e:
+        logger.debug("pydub unavailable: %s", e)
+
+    # Strategy 2: ffmpeg subprocess
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-i", "pipe:0", "-f", "s16le", "-ar", "16000", "-ac", "1", "pipe:1"],
+            input=mp3_data, capture_output=True, timeout=10,
+        )
+        if proc.returncode == 0 and proc.stdout:
+            return proc.stdout
+    except Exception as e:
+        logger.debug("ffmpeg unavailable: %s", e)
+
+    return None
