@@ -19,9 +19,11 @@ SERPER_API_KEY: str = os.environ.get("SERPER_API_KEY", "")
 MOCK_MODE: bool = os.environ.get("MOCK_MODE", "false").lower() == "true"
 
 # Gemini model selection
-LLM_MODEL: str = "gemini-2.0-flash"
-LLM_MODEL_FALLBACK: str = "gemini-2.5-flash"
-MODERATION_MODEL: str = "gemini-2.0-flash-lite"
+LLM_MODEL: str = "google/gemini-2.0-flash-001"
+LLM_MODEL_FALLBACK: str = "google/gemini-2.5-flash"
+MODERATION_MODEL: str = "google/gemini-2.0-flash-lite"
+LLM_PROVIDER: str = "openrouter"  # openrouter | gemini
+LLM_API_URL: str = "https://openrouter.ai/api/v1/chat/completions"
 
 # Limits
 MAX_ANSWER_SENTENCES: int = 2

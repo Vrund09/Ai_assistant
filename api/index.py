@@ -82,19 +82,17 @@ async def chat(request: ChatRequest):
 
 
 async def _call_gemini(user_message: str) -> str:
-    """Call Gemini with simple prompt + pre-fetched weather context."""
+    """Call LLM via OpenAI-compatible API (OpenRouter or direct Gemini)."""
     if MOCK_MODE:
         logger.info("MOCK_MODE: returning canned answer")
         return "The weather in Hyderabad is currently 32 degrees with clear skies."
 
     try:
-        from google import genai
-        from api.config import GEMINI_API_KEY, LLM_MODEL
+        import httpx
+        from api.config import GEMINI_API_KEY, LLM_MODEL, LLM_API_URL
 
         if not GEMINI_API_KEY:
             return "I'm not configured with an API key yet. Please set GEMINI_API_KEY."
-
-        client = genai.Client(api_key=GEMINI_API_KEY)
 
         # Check if this is a weather query and pre-fetch data
         weather_context = ""
@@ -124,32 +122,66 @@ async def _call_gemini(user_message: str) -> str:
                 f"The user asked: \"{user_message}\""
             )
 
-        # Try multiple models in case of rate limits
-        model_order = [LLM_MODEL, "gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-flash-latest"]
-        last_error = None
-        for model in model_order:
-            try:
-                response = client.models.generate_content(
-                    model=model,
-                    contents=prompt,
-                    config={"temperature": 0.7, "max_output_tokens": 200},
-                )
-                text = (response.text or "").strip()
-                if text:
-                    logger.info("LLM success with model: %s", model)
-                    return text
-            except Exception as e:
-                last_error = e
-                logger.warning("Model %s failed: %s", model, str(e)[:100])
-                if "429" not in str(e):
-                    break  # Don't retry on non-rate-limit errors
+        headers = {
+            "Authorization": f"Bearer {GEMINI_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://gcc-livid.vercel.app",
+            "X-Title": "Voice Avatar Assistant",
+        }
 
-        logger.error("All LLM models failed. Last error: %s", last_error)
-        return "I'm having trouble connecting to my brain right now. Please try again in a moment."
+        body = {
+            "model": LLM_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7,
+            "max_tokens": 200,
+        }
+
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            logger.info("LLM request: %s -> %s", LLM_MODEL, LLM_API_URL)
+            response = await client.post(LLM_API_URL, headers=headers, json=body)
+
+            if response.status_code == 200:
+                data = response.json()
+                content = data["choices"][0]["message"]["content"]
+                logger.info("LLM success: %s", data.get("model", "?"))
+                return content.strip()
+            else:
+                logger.error("LLM API error: %s %s", response.status_code, response.text[:200])
+                # Fallback: try direct Google Gemini
+                return await _call_gemini_backup(prompt)
 
     except Exception as e:
-        logger.error("Gemini call error: %s", e)
-        return ERROR_MESSAGE
+        logger.error("OpenRouter error: %s", e)
+        # Try fallback
+        try:
+            return await _call_gemini_backup(prompt)
+        except Exception:
+            return "I'm having trouble connecting to my brain right now. Please try again in a moment."
+
+
+async def _call_gemini_backup(prompt: str) -> str:
+    """Fallback: try direct Google Gemini API."""
+    from google import genai
+    from api.config import GEMINI_API_KEY
+
+    if not GEMINI_API_KEY:
+        raise Exception("No API key")
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    models = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.0-flash-lite"]
+    for model in models:
+        try:
+            response = client.models.generate_content(
+                model=model, contents=prompt,
+                config={"temperature": 0.7, "max_output_tokens": 200},
+            )
+            text = (response.text or "").strip()
+            if text:
+                logger.info("Fallback success with: %s", model)
+                return text
+        except Exception as e:
+            logger.warning("Fallback model %s: %s", model, str(e)[:80])
+    raise Exception("All models failed")
 
 
 def _extract_city(text: str) -> str | None:
