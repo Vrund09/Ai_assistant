@@ -293,7 +293,7 @@ video{background:var(--surface)}
 </div>
 </div>
 
-<footer>Gemini + Simli + Open-Meteo</footer>
+<footer>Groq + Simli + Open-Meteo + edge-tts</footer>
 </div>
 
 <script>
@@ -508,16 +508,14 @@ async function send() {
         var cls = d.blocked ? 'assistant blocked' : 'assistant';
         addMsg(d.reply, cls);
         if (d.blocked) {
-            // Use browser TTS for refusal messages
             speakBrowser(d.reply);
             var tst = document.createElement('div'); tst.className = 'toast'; tst.textContent = 'Blocked by safety filter'; document.body.appendChild(tst);
             setTimeout(function(){ tst.remove(); }, 4000);
         } else {
-            // Try Simli TTS pipeline first, fall back to browser
+            // Run BOTH: browser TTS (audible) + Simli PCM (lip-sync)
+            speakBrowser(d.reply);
             if (simliReady && simliWS && simliWS.readyState === WebSocket.OPEN) {
                 speakSimli(d.reply);
-            } else {
-                speakBrowser(d.reply);
             }
         }
     } catch(e) {

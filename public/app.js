@@ -384,32 +384,24 @@ function stopSimli() {
 
 // Simli TTS pipeline — fetches PCM from /api/tts, pipes through WebRTC for lip-sync
 async function speakViaSimli(text) {
-    if (!text || state.isSpeaking) return;
+    if (!text) return;
 
     if (!simliWS || simliWS.readyState !== WebSocket.OPEN) {
-        speakText(text);
         return;
     }
 
-    state.isSpeaking = true;
-    setStatus('speaking', 'Speaking...');
-    animateMouth(true);
-
+    // Run independently — don't block browser TTS
     try {
-        // 1. Fetch MP3 from edge-tts endpoint
         var resp = await fetch(API_BASE + '/tts?text=' + encodeURIComponent(text));
-        if (!resp.ok) throw new Error('TTS failed: ' + resp.status);
+        if (!resp.ok) return;
 
         var mp3Buffer = await resp.arrayBuffer();
-        if (!mp3Buffer || mp3Buffer.byteLength === 0) throw new Error('Empty audio');
+        if (!mp3Buffer || mp3Buffer.byteLength === 0) return;
 
-        console.log('Got MP3:', mp3Buffer.byteLength, 'bytes');
-
-        // 2. Decode MP3 to PCM 16kHz mono using Web Audio API
+        // Decode MP3 → PCM 16kHz mono via Web Audio API
         var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         var audioBuffer = await audioCtx.decodeAudioData(mp3Buffer);
 
-        // Resample to 16kHz mono Int16 PCM
         var sampleRate = 16000;
         var length = Math.ceil(audioBuffer.duration * sampleRate);
         var offlineCtx = new OfflineAudioContext(1, length, sampleRate);
@@ -417,20 +409,16 @@ async function speakViaSimli(text) {
         source.buffer = audioBuffer;
         source.connect(offlineCtx.destination);
         source.start();
-
         var rendered = await offlineCtx.startRendering();
         var channel = rendered.getChannelData(0);
 
-        // Convert Float32 → Int16 PCM
         var pcmInt16 = new Int16Array(channel.length);
         for (var i = 0; i < channel.length; i++) {
             pcmInt16[i] = Math.max(-32768, Math.min(32767, Math.round(channel[i] * 32767)));
         }
         var pcmBytes = new Uint8Array(pcmInt16.buffer);
 
-        console.log('Decoded PCM:', pcmBytes.length, 'bytes @ 16kHz');
-
-        // 3. Send PCM through Simli WebRTC in chunks
+        // Send PCM through Simli WebRTC in chunks
         var chunkSize = 6000;
         for (var i = 0; i < pcmBytes.length; i += chunkSize) {
             if (simliWS && simliWS.readyState === WebSocket.OPEN) {
@@ -438,20 +426,8 @@ async function speakViaSimli(text) {
             }
             await new Promise(function (r) { setTimeout(r, 20); });
         }
-
-        // Wait for audio duration
-        var durationMs = (pcmInt16.length / sampleRate) * 1000 + 200;
-        setTimeout(function () {
-            state.isSpeaking = false;
-            animateMouth(false);
-            setStatus('idle', 'Waiting for your question...');
-        }, durationMs);
-
     } catch (e) {
-        console.log('Simli TTS failed, falling back to browser:', e.message);
-        state.isSpeaking = false;
-        animateMouth(false);
-        speakText(text);
+        console.log('Simli PCM send failed:', e.message);
     }
 }
 
@@ -493,11 +469,10 @@ async function sendMessage(message) {
             speakText(data.reply);
             showToast('Message blocked by safety filter', 'error');
         } else {
-            // Try Simli TTS pipeline first (lip-sync via WebRTC), fall back to browser
+            // Browser TTS for audible voice + Simli PCM for lip-sync (both run)
+            speakText(data.reply);
             if (state.simliReady && simliWS && simliWS.readyState === WebSocket.OPEN) {
                 speakViaSimli(data.reply);
-            } else {
-                speakText(data.reply);
             }
         }
 
