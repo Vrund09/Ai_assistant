@@ -180,11 +180,11 @@ async def simli_config():
 
 
 @app.get("/api/tts")
-async def tts_endpoint(text: str = "", voice: str = "Puck"):
-    """Generate PCM 16kHz mono audio from text using Gemini TTS.
+async def tts_endpoint(text: str = "", voice: str = "en-US-JennyNeural"):
+    """Generate PCM 16kHz mono audio from text using edge-tts (free, no key).
 
     Returns raw PCM bytes for direct piping into Simli WebRTC.
-    Voice options (female): Puck, Kore, Leda, Aoede, Autonoe, Callirrhoe
+    Female voices: en-US-JennyNeural, en-US-AriaNeural, en-IN-NeerjaNeural
     """
     from fastapi.responses import Response
 
