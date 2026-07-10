@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from api.config import MOCK_MODE, ERROR_MESSAGE
+from api.config import MOCK_MODE, ERROR_MESSAGE, GEMINI_API_KEY
 from api.guardrails import run_guardrail_pipeline, layer3_output_scan
 from api.tools import get_weather, web_search
 
@@ -94,10 +94,10 @@ async def _call_gemini(user_message: str) -> str:
     # Try OpenRouter (OpenAI-compatible) first
     try:
         import httpx
-        from api.config import GEMINI_API_KEY as key, LLM_MODEL, LLM_API_URL
+        from api.config import LLM_MODEL as model, LLM_API_URL
 
         headers = {
-            "Authorization": f"Bearer {key}",
+            "Authorization": f"Bearer {GEMINI_API_KEY}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://gcc-livid.vercel.app",
             "X-Title": "Voice Avatar Assistant",
