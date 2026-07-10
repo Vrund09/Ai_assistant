@@ -18,10 +18,9 @@ SERPER_API_KEY: str = os.environ.get("SERPER_API_KEY", "")
 # Development mode
 MOCK_MODE: bool = os.environ.get("MOCK_MODE", "false").lower() == "true"
 
-# LLM model selection — Groq (fastest free tier)
+# LLM model selection
 LLM_MODEL: str = "llama-3.3-70b-versatile"
-LLM_MODEL_FALLBACK: str = "qwen/qwen3-32b"
-MODERATION_MODEL: str = "gemini-2.0-flash-lite"
+MODERATION_MODEL: str = "llama-3.3-70b-versatile"
 LLM_PROVIDER: str = "groq"
 LLM_API_URL: str = "https://api.groq.com/openai/v1/chat/completions"
 

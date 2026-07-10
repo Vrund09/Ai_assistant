@@ -54,12 +54,12 @@ def test_chat_empty_message(mock_moderation, mock_gemini):
 @patch("api.guardrails.layer2_moderation")
 def test_chat_error_handling(mock_moderation, mock_gemini):
     mock_moderation.return_value = (False, None)
-    mock_gemini.side_effect = Exception("Gemini API error")
+    mock_gemini.side_effect = Exception("API error")
 
     response = client.post("/api/chat", json={"message": "hello"})
     assert response.status_code == 200
     data = response.json()
-    assert "sorry" in data["reply"].lower() or "couldn't" in data["reply"].lower() or "problem" in data["reply"].lower()
+    assert "sorry" in data["reply"].lower() or "couldn't" in data["reply"].lower()
 
 
 def test_simli_config_no_key():

@@ -138,13 +138,13 @@ class GuardrailResult:
 
 
 async def run_guardrail_pipeline(user_text: str) -> GuardrailResult:
-    """Run Layer 1 only. Layer 2 (LLM moderation) is disabled for reliability.
-    
-    Layer 1 catches 90% of unsafe queries instantly with zero API cost.
-    Layer 3 (output scan) still runs on the final answer.
-    """
+    """Run Layer 1 + Layer 2. Layer 3 is called separately on the output."""
     blocked, reason = layer1_blocklist(user_text)
     if blocked:
         return GuardrailResult(blocked=True, layer="layer1", reason=reason, response_text=REFUSAL_MESSAGE)
+
+    blocked, reason = await layer2_moderation(user_text)
+    if blocked:
+        return GuardrailResult(blocked=True, layer="layer2", reason=reason, response_text=REFUSAL_MESSAGE)
 
     return GuardrailResult(blocked=False, layer="", reason=None, response_text="")

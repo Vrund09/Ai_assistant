@@ -382,49 +382,20 @@ function stopSimli() {
     elements.avatarPlaceholder.classList.remove('hidden');
 }
 
-// Simli TTS pipeline — fetches PCM from Gemini TTS, pipes through WebRTC for lip-sync
-async function speakViaSimli(text) {
-    if (!text || state.isSpeaking || !simliWS || simliWS.readyState !== WebSocket.OPEN) {
-        // Fall back to browser TTS
-        speakText(text);
-        return;
-    }
-
-    state.isSpeaking = true;
-    setStatus('speaking', 'Speaking...');
-    animateMouth(true);
+// Simli needs PCM audio. In a full integration, you'd use a TTS service
+// (ElevenLabs, Gemini TTS) to get PCM Int16 16kHz mono audio, then send it.
+async function speakWithSimli(text) {
+    if (!state.simliReady || !simliWS || simliWS.readyState !== WebSocket.OPEN) return;
 
     try {
-        var resp = await fetch('/api/tts?text=' + encodeURIComponent(text) + '&voice=Puck');
-        if (!resp.ok) throw new Error('TTS failed: ' + resp.status);
-        var pcmBuffer = await resp.arrayBuffer();
-        if (!pcmBuffer || pcmBuffer.byteLength === 0) throw new Error('Empty audio');
-
-        // Pipe PCM through Simli WebRTC in chunks
-        var chunkSize = 6000;
-        var uint8 = new Uint8Array(pcmBuffer);
-        for (var i = 0; i < uint8.length; i += chunkSize) {
-            if (simliWS && simliWS.readyState === WebSocket.OPEN) {
-                simliWS.send(uint8.slice(i, i + chunkSize));
-            }
-            await new Promise(function(r) { setTimeout(r, 20); });
-        }
-
-        setTimeout(function() {
-            state.isSpeaking = false;
-            animateMouth(false);
-            setStatus('idle', 'Waiting for your question...');
-        }, 500);
-    } catch(e) {
-        console.log('Simli TTS failed, falling back to browser:', e);
-        state.isSpeaking = false;
-        animateMouth(false);
-        speakText(text);
+        // Placeholder: in production, fetch PCM audio from a TTS API
+        // const audioResponse = await fetch(TTS_API_URL, { method:'POST', body: JSON.stringify({text}) });
+        // const pcmBuffer = await audioResponse.arrayBuffer();
+        // simliWS.send(new Uint8Array(pcmBuffer));
+        console.log('Simli would speak:', text.substring(0, 50));
+    } catch (e) {
+        console.error('Simli speak error:', e);
     }
-}
-
-async function speakWithSimli(text) {
-    return speakViaSimli(text);
 }
 
 // =========================================================================

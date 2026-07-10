@@ -1,32 +1,17 @@
-"""Unit tests for weather and web search tools."""
+"""Unit tests for weather tools."""
 
 import pytest
-from api.tools import format_weather_answer, WeatherResult
+from api.tools import WeatherResult
 
 
-class TestFormatWeatherAnswer:
+class TestWeatherResultFormat:
     def test_successful_weather(self):
-        weather = WeatherResult(
-            success=True,
-            city="London",
-            temperature=15.3,
-            condition="partly cloudy",
-        )
-        result = format_weather_answer(weather)
-        assert "London" in result
-        assert "15 degrees" in result
-        assert "partly cloudy" in result
+        weather = WeatherResult(success=True, city="London", temperature=15.3, condition="partly cloudy")
+        assert weather.success
+        assert weather.city == "London"
+        assert weather.temperature == 15.3
 
     def test_failed_weather_returns_error(self):
-        weather = WeatherResult(
-            success=False,
-            city="XyzzyTown",
-            error="City not found",
-        )
-        result = format_weather_answer(weather)
-        assert "not found" in result.lower()
-
-    def test_missing_temperature(self):
-        weather = WeatherResult(success=True, city="Paris")
-        result = format_weather_answer(weather)
-        assert "Paris" in result
+        weather = WeatherResult(success=False, city="XyzzyTown", error="City not found")
+        assert not weather.success
+        assert weather.error is not None

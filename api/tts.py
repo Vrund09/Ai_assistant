@@ -31,7 +31,7 @@ async def generate_pcm(text: str, voice: str = "Puck") -> bytes | None:
 
         interaction = client.interactions.create(
             model="gemini-2.5-flash-preview-tts",
-            input=f"Convert this text to speech: {text}",
+            input=text,
             response_format={"type": "audio"},
             generation_config={"speech_config": [{"voice": voice}]},
         )

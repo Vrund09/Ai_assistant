@@ -91,48 +91,26 @@ async def _call_gemini(user_message: str) -> str:
     if not GEMINI_API_KEY:
         return "I'm not configured with an API key yet."
 
-    # Try Groq (OpenAI-compatible) first
-    try:
-        import httpx
-        from api.config import LLM_MODEL, LLM_API_URL, GEMINI_API_KEY as gkey
+    # Groq API (OpenAI-compatible)
+    import httpx
+    from api.config import LLM_MODEL, LLM_API_URL, GEMINI_API_KEY as gkey
 
-        headers = {
-            "Authorization": f"Bearer {gkey}",
-            "Content-Type": "application/json",
-        }
-        body = {"model": LLM_MODEL, "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.7, "max_tokens": 200}
+    headers = {
+        "Authorization": f"Bearer {gkey}",
+        "Content-Type": "application/json",
+    }
+    body = {"model": LLM_MODEL, "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7, "max_tokens": 200}
 
-        async with httpx.AsyncClient(timeout=25.0) as client:
-            response = await client.post(LLM_API_URL, headers=headers, json=body)
-            if response.status_code == 200:
-                data = response.json()
-                return data["choices"][0]["message"]["content"].strip()
-            else:
-                logger.warning("OpenRouter %s: %s", response.status_code, response.text[:200])
-    except Exception as e:
-        logger.warning("OpenRouter error: %s, trying Gemini fallback", e)
-
-    # Fallback: direct Google Gemini
-    try:
-        from google import genai
-        from api.config import GEMINI_API_KEY as gkey
-        client = genai.Client(api_key=gkey)
-        for model in ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.0-flash-lite"]:
-            try:
-                response = client.models.generate_content(
-                    model=model, contents=prompt,
-                    config={"temperature": 0.7, "max_output_tokens": 200})
-                text = (response.text or "").strip()
-                if text:
-                    logger.info("Gemini fallback OK: %s", model)
-                    return text
-            except Exception as e2:
-                logger.warning("Gemini %s: %s", model, str(e2)[:80])
-    except Exception as e:
-        logger.error("Gemini fallback error: %s", e)
-
-    return "I'm having trouble connecting to my brain right now. Please try again in a moment."
+    async with httpx.AsyncClient(timeout=25.0) as client:
+        response = await client.post(LLM_API_URL, headers=headers, json=body)
+        if response.status_code == 200:
+            data = response.json()
+            logger.info("Groq LLM OK: %s", data.get("model", LLM_MODEL))
+            return data["choices"][0]["message"]["content"].strip()
+        else:
+            logger.error("Groq API error %s: %s", response.status_code, response.text[:200])
+            raise Exception(f"Groq returned {response.status_code}")
 
 
 async def _build_prompt(user_message: str) -> str:
@@ -184,7 +162,13 @@ def _extract_city(text: str) -> str | None:
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "mock_mode": MOCK_MODE}
+    from api.config import LLM_API_URL, LLM_MODEL
+    return {
+        "status": "ok",
+        "mock_mode": MOCK_MODE,
+        "llm_url": LLM_API_URL,
+        "llm_model": LLM_MODEL,
+    }
 
 
 @app.get("/api/simli-config")
