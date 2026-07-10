@@ -75,34 +75,9 @@ async def layer2_moderation(user_text: str) -> tuple[bool, str | None]:
         logger.warning("No Gemini API key — skipping Layer 2")
         return False, None
 
-    try:
-        from google import genai
-
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        prompt = MODERATION_PROMPT.format(user_message=user_text[:500])
-        response = client.models.generate_content(
-            model=MODERATION_MODEL,
-            contents=prompt,
-            config={"temperature": 0, "max_output_tokens": 80},
-        )
-        raw = (response.text or "").strip()
-        logger.info("Layer 2 raw response: %s", raw)
-
-        # Just check if the response contains UNSAFE — no JSON parsing needed
-        if "UNSAFE" in raw:
-            # Try to extract category if present
-            import re as _re
-            cat_match = _re.search(r'"category"\s*:\s*"([^"]+)"', raw)
-            category = cat_match.group(1) if cat_match else "detected"
-            logger.info("Layer 2 block — category: %s", category)
-            return True, f"llm_unsafe:{category}"
-
-        return False, None
-
-    except Exception as e:
-        logger.error("Layer 2 moderation error: %s. Falling back to open.", e)
-        # Layer 2 unavailable — pass through (Layer 1 + Layer 3 still active)
-        return False, None
+    # Layer 2 is currently disabled (requires google-genai which is unused)
+    # Layer 1 (regex) + Layer 3 (output scan) still active
+    return False, None
 
 
 # =============================================================================
