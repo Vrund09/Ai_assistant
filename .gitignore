@@ -38,3 +38,6 @@ htmlcov/
 
 # CommandCode
 .commandcode/
+
+# Report source kept local only (PDF is committed instead)
+report.html
