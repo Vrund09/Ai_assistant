@@ -109,8 +109,8 @@ async def _call_gemini(user_message: str) -> str:
             logger.info("Groq LLM OK: %s", data.get("model", LLM_MODEL))
             return data["choices"][0]["message"]["content"].strip()
         else:
-            logger.error("Groq API error %s: %s", response.status_code, response.text[:200])
-            raise Exception(f"Groq returned {response.status_code}")
+            logger.error("Groq error %s: %s", response.status_code, response.text[:200])
+            return "I'm a bit overwhelmed right now. Give me a moment and try again."
 
 
 async def _build_prompt(user_message: str) -> str:
