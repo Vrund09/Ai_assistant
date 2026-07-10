@@ -554,7 +554,7 @@ async function speakSimli(text) {
     animateMouth(true);
     try {
         // Fetch PCM audio from our TTS endpoint
-        var resp = await fetch('/api/tts?text=' + encodeURIComponent(text) + '&voice=Puck');
+        var resp = await fetch('/api/tts?text=' + encodeURIComponent(text));
         if (!resp.ok) throw new Error('TTS failed: ' + resp.status);
         var pcmBuffer = await resp.arrayBuffer();
         if (!pcmBuffer || pcmBuffer.byteLength === 0) throw new Error('Empty audio');

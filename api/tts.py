@@ -1,14 +1,13 @@
-"""Gemini TTS — generates PCM audio for Simli WebRTC.
+"""TTS via Google Gemini TTS REST API — no SDK, just httpx.
 
-Gemini returns 24kHz mono PCM (base64-encoded).
-Simli needs 16kHz mono PCM Int16.
-We decode and resample server-side.
+Gemini TTS returns base64-encoded 24kHz PCM audio.
+We decode + resample to 16kHz mono for Simli WebRTC.
+Uses the GEMINI_API_KEY (Groq) — but falls back if it doesn't work.
 """
 
 import base64
 import logging
 import struct
-from io import BytesIO
 
 from api.config import GEMINI_API_KEY
 
@@ -16,67 +15,75 @@ logger = logging.getLogger("tts")
 
 
 async def generate_pcm(text: str, voice: str = "Puck") -> bytes | None:
-    """Generate raw PCM 16kHz mono Int16 audio from text using Gemini TTS.
+    """Generate PCM 16kHz mono Int16 audio using Google Gemini TTS REST API.
 
-    Returns raw PCM bytes ready for Simli WebRTC, or None on failure.
+    Free voices (female): Puck, Kore, Leda, Aoede.
+    Falls back gracefully if API key or network is unavailable.
     """
     if not GEMINI_API_KEY:
-        logger.warning("No Gemini API key — TTS unavailable")
+        logger.warning("No API key for TTS")
         return None
 
     try:
-        from google import genai
+        import httpx
 
-        client = genai.Client(api_key=GEMINI_API_KEY)
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent"
 
-        interaction = client.interactions.create(
-            model="gemini-2.5-flash-preview-tts",
-            input=text,
-            response_format={"type": "audio"},
-            generation_config={"speech_config": [{"voice": voice}]},
-        )
+        body = {
+            "contents": [{"parts": [{"text": f"Speak this naturally: {text}"}]}],
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "speechConfig": {
+                    "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}
+                },
+            },
+        }
 
-        # Audio comes as base64-encoded 24kHz mono PCM (Int16)
-        audio_b64 = interaction.output_audio.data
-        if not audio_b64:
-            logger.warning("TTS returned empty audio")
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                f"{url}?key={GEMINI_API_KEY}",
+                json=body,
+                headers={"Content-Type": "application/json"},
+            )
+
+            if response.status_code != 200:
+                logger.error("TTS API %s: %s", response.status_code, response.text[:150])
+                return None
+
+            data = response.json()
+            candidates = data.get("candidates", [])
+            if not candidates:
+                return None
+
+            parts = candidates[0].get("content", {}).get("parts", [])
+            for part in parts:
+                if "inlineData" in part and part["inlineData"].get("mimeType") == "audio/pcm":
+                    audio_b64 = part["inlineData"]["data"]
+                    if audio_b64:
+                        raw_24khz = base64.b64decode(audio_b64)
+                        pcm_16khz = _resample_24k_to_16k(raw_24khz)
+                        logger.info("TTS: %d chars → %d bytes PCM", len(text), len(pcm_16khz))
+                        return pcm_16khz
+
             return None
-
-        raw_24khz = base64.b64decode(audio_b64)
-
-        # Resample 24kHz → 16kHz (Simli requirement)
-        # Simple ratio: keep every 3rd sample out of 2 (24000/16000 = 3/2)
-        pcm_16khz = _resample_pcm(raw_24khz, 24000, 16000)
-
-        logger.info("TTS: %d chars → %d bytes PCM 16kHz", len(text), len(pcm_16khz))
-        return pcm_16khz
 
     except Exception as e:
         logger.error("TTS error: %s", e)
         return None
 
 
-def _resample_pcm(pcm: bytes, from_rate: int, to_rate: int) -> bytes:
-    """Simple linear-interpolation PCM resampler.
-
-    Converts Int16 mono PCM from `from_rate` Hz to `to_rate` Hz.
-    """
-    if from_rate == to_rate:
-        return pcm
-
-    samples = struct.unpack("<%dh" % (len(pcm) // 2), pcm)
-    ratio = from_rate / to_rate
+def _resample_24k_to_16k(pcm: bytes) -> bytes:
+    """Resample 24kHz Int16 PCM → 16kHz Int16 PCM (simple linear interpolation)."""
+    samples = struct.unpack(f"<{len(pcm)//2}h", pcm)
+    ratio = 24000 / 16000
     out_len = int(len(samples) / ratio)
     out = bytearray()
-
     for i in range(out_len):
         src_idx = i * ratio
         idx_lo = int(src_idx)
         idx_hi = min(idx_lo + 1, len(samples) - 1)
         frac = src_idx - idx_lo
-
         val = int(samples[idx_lo] * (1 - frac) + samples[idx_hi] * frac)
         val = max(-32768, min(32767, val))
         out.extend(struct.pack("<h", val))
-
     return bytes(out)
