@@ -544,12 +544,10 @@ function speakBrowser(text) {
     window.speechSynthesis.speak(u);
 }
 
-// Simli TTS — MP3 from edge-tts → Web Audio decode → PCM → Simli WebRTC
+// Simli TTS — runs in parallel with browser TTS for lip-sync only
 async function speakSimli(text) {
-    if (!text || isSpeaking) return;
-    isSpeaking = true;
-    setStatus('speaking', 'Speaking...');
-    animateMouth(true);
+    if (!text) return;
+    // No isSpeaking guard — runs independently alongside browser TTS
     try {
         var resp = await fetch('/api/tts?text=' + encodeURIComponent(text));
         if (!resp.ok) throw new Error('TTS failed');
@@ -576,11 +574,15 @@ async function speakSimli(text) {
             await new Promise(function(r) { setTimeout(r, 20); });
         }
         var dur = (pcm16.length / sr) * 1000 + 300;
-        setTimeout(function() { isSpeaking = false; animateMouth(false); setStatus('idle', 'Waiting...'); }, dur);
+        setTimeout(function() {
+            // Only clear isSpeaking if browser TTS already finished
+            if (!window.speechSynthesis.speaking) {
+                isSpeaking = false; animateMouth(false); setStatus('idle', 'Waiting...');
+            }
+        }, dur);
     } catch(e) {
         console.log('Simli TTS failed:', e.message);
-        isSpeaking = false; animateMouth(false);
-        speakBrowser(text);
+        // Don't clear isSpeaking — browser TTS may still be running
     }
 }
 
