@@ -91,16 +91,14 @@ async def _call_gemini(user_message: str) -> str:
     if not GEMINI_API_KEY:
         return "I'm not configured with an API key yet."
 
-    # Try OpenRouter (OpenAI-compatible) first
+    # Try Groq (OpenAI-compatible) first
     try:
         import httpx
-        from api.config import LLM_MODEL as model, LLM_API_URL
+        from api.config import LLM_MODEL, LLM_API_URL, GEMINI_API_KEY as gkey
 
         headers = {
-            "Authorization": f"Bearer {GEMINI_API_KEY}",
+            "Authorization": f"Bearer {gkey}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://gcc-livid.vercel.app",
-            "X-Title": "Voice Avatar Assistant",
         }
         body = {"model": LLM_MODEL, "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.7, "max_tokens": 200}
