@@ -82,106 +82,89 @@ async def chat(request: ChatRequest):
 
 
 async def _call_gemini(user_message: str) -> str:
-    """Call LLM via OpenAI-compatible API (OpenRouter or direct Gemini)."""
+    """Call LLM via OpenAI-compatible API (OpenRouter) with Gemini fallback."""
     if MOCK_MODE:
-        logger.info("MOCK_MODE: returning canned answer")
         return "The weather in Hyderabad is currently 32 degrees with clear skies."
 
+    prompt = await _build_prompt(user_message)
+
+    if not GEMINI_API_KEY:
+        return "I'm not configured with an API key yet."
+
+    # Try OpenRouter (OpenAI-compatible) first
     try:
         import httpx
-        from api.config import GEMINI_API_KEY, LLM_MODEL, LLM_API_URL
-
-        if not GEMINI_API_KEY:
-            return "I'm not configured with an API key yet. Please set GEMINI_API_KEY."
-
-        # Check if this is a weather query and pre-fetch data
-        weather_context = ""
-        msg_lower = user_message.lower()
-        if any(w in msg_lower for w in ["weather", "temperature", "rain", "sunny", "cloud", "forecast", "humidity", "wind"]):
-            city = _extract_city(user_message)
-            if city:
-                weather = await get_weather(city)
-                if weather.success:
-                    temp = f"{weather.temperature:.0f}" if weather.temperature else "unknown"
-                    weather_context = f"Weather for {weather.city}: {temp}°C, {weather.condition}, humidity {weather.humidity}%, wind {weather.wind_speed} km/h."
-                else:
-                    weather_context = str(weather.error)
-
-        if weather_context:
-            prompt = (
-                f"You are a warm, friendly voice assistant. Answer in 1-2 short sentences, natural spoken style. "
-                f"No markdown.\n\n"
-                f"Current weather data: {weather_context}\n\n"
-                f"The user asked: \"{user_message}\"\n"
-                f"Include the weather data naturally in your answer."
-            )
-        else:
-            prompt = (
-                f"You are a warm, friendly voice assistant. Answer in 1-2 short sentences, natural spoken style. "
-                f"No markdown.\n\n"
-                f"The user asked: \"{user_message}\""
-            )
+        from api.config import GEMINI_API_KEY as key, LLM_MODEL, LLM_API_URL
 
         headers = {
-            "Authorization": f"Bearer {GEMINI_API_KEY}",
+            "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://gcc-livid.vercel.app",
             "X-Title": "Voice Avatar Assistant",
         }
-
-        body = {
-            "model": LLM_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7,
-            "max_tokens": 200,
-        }
+        body = {"model": LLM_MODEL, "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7, "max_tokens": 200}
 
         async with httpx.AsyncClient(timeout=25.0) as client:
-            logger.info("LLM request: %s -> %s", LLM_MODEL, LLM_API_URL)
             response = await client.post(LLM_API_URL, headers=headers, json=body)
-
             if response.status_code == 200:
                 data = response.json()
-                content = data["choices"][0]["message"]["content"]
-                logger.info("LLM success: %s", data.get("model", "?"))
-                return content.strip()
+                return data["choices"][0]["message"]["content"].strip()
             else:
-                logger.error("LLM API error: %s %s", response.status_code, response.text[:200])
-                # Fallback: try direct Google Gemini
-                return await _call_gemini_backup(prompt)
-
+                logger.warning("OpenRouter %s: %s", response.status_code, response.text[:200])
     except Exception as e:
-        logger.error("OpenRouter error: %s", e)
-        # Try fallback
-        try:
-            return await _call_gemini_backup(prompt)
-        except Exception:
-            return "I'm having trouble connecting to my brain right now. Please try again in a moment."
+        logger.warning("OpenRouter error: %s, trying Gemini fallback", e)
+
+    # Fallback: direct Google Gemini
+    try:
+        from google import genai
+        from api.config import GEMINI_API_KEY as gkey
+        client = genai.Client(api_key=gkey)
+        for model in ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.0-flash-lite"]:
+            try:
+                response = client.models.generate_content(
+                    model=model, contents=prompt,
+                    config={"temperature": 0.7, "max_output_tokens": 200})
+                text = (response.text or "").strip()
+                if text:
+                    logger.info("Gemini fallback OK: %s", model)
+                    return text
+            except Exception as e2:
+                logger.warning("Gemini %s: %s", model, str(e2)[:80])
+    except Exception as e:
+        logger.error("Gemini fallback error: %s", e)
+
+    return "I'm having trouble connecting to my brain right now. Please try again in a moment."
 
 
-async def _call_gemini_backup(prompt: str) -> str:
-    """Fallback: try direct Google Gemini API."""
-    from google import genai
-    from api.config import GEMINI_API_KEY
+async def _build_prompt(user_message: str) -> str:
+    """Build LLM prompt with weather context pre-fetched."""
+    weather_context = ""
+    msg_lower = user_message.lower()
+    if any(w in msg_lower for w in ["weather", "temperature", "rain", "sunny", "cloud", "forecast", "humidity", "wind"]):
+        city = _extract_city(user_message)
+        if city:
+            weather = await get_weather(city)
+            if weather.success:
+                temp = f"{weather.temperature:.0f}" if weather.temperature else "?"
+                weather_context = (
+                    f"Weather for {weather.city}: {temp}°C, {weather.condition}, "
+                    f"humidity {weather.humidity}%, wind {weather.wind_speed} km/h."
+                )
+            else:
+                weather_context = str(weather.error)
 
-    if not GEMINI_API_KEY:
-        raise Exception("No API key")
-
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    models = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.0-flash-lite"]
-    for model in models:
-        try:
-            response = client.models.generate_content(
-                model=model, contents=prompt,
-                config={"temperature": 0.7, "max_output_tokens": 200},
-            )
-            text = (response.text or "").strip()
-            if text:
-                logger.info("Fallback success with: %s", model)
-                return text
-        except Exception as e:
-            logger.warning("Fallback model %s: %s", model, str(e)[:80])
-    raise Exception("All models failed")
+    base = (
+        "You are a warm, friendly voice assistant. Answer in 1-2 short sentences, "
+        "natural spoken style. No markdown.\n\n"
+    )
+    if weather_context:
+        return (
+            base + f"Current weather data: {weather_context}\n\n"
+            f'The user asked: "{user_message}"\n'
+            "Include the weather data naturally in your answer."
+        )
+    return base + f'The user asked: "{user_message}"'
 
 
 def _extract_city(text: str) -> str | None:
