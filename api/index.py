@@ -181,9 +181,9 @@ async def simli_config():
 
 @app.get("/api/tts")
 async def tts_endpoint(text: str = "", voice: str = "en-US-JennyNeural"):
-    """Generate PCM 16kHz mono audio from text using edge-tts (free, no key).
+    """Generate audio from text using edge-tts (free, no key).
 
-    Returns raw PCM bytes for direct piping into Simli WebRTC.
+    Returns MP3 audio bytes. Browser decodes via Web Audio API.
     Female voices: en-US-JennyNeural, en-US-AriaNeural, en-IN-NeerjaNeural
     """
     from fastapi.responses import Response
@@ -191,13 +191,13 @@ async def tts_endpoint(text: str = "", voice: str = "en-US-JennyNeural"):
     if not text or not text.strip():
         return {"error": "No text provided"}
 
-    from api.tts import generate_pcm
+    from api.tts import generate_mp3
 
-    pcm = await generate_pcm(text.strip(), voice)
-    if pcm is None:
+    mp3 = await generate_mp3(text.strip(), voice)
+    if mp3 is None:
         return {"error": "TTS generation failed"}
 
-    return Response(content=pcm, media_type="audio/pcm")
+    return Response(content=mp3, media_type="audio/mpeg")
 
 
 # Mount static frontend (serve public/ directory)
