@@ -6,7 +6,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Core API keys
-GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
+# LLM key: the app runs on Groq. We read GROQ_API_KEY first and fall back to
+# the legacy GEMINI_API_KEY name so existing deployments keep working. The
+# Python symbol stays GEMINI_API_KEY for import compatibility across modules.
+GEMINI_API_KEY: str = os.environ.get("GROQ_API_KEY", "") or os.environ.get("GEMINI_API_KEY", "")
 SIMLI_API_KEY: str = os.environ.get("SIMLI_API_KEY", "")
 SIMLI_FACE_ID: str = os.environ.get("SIMLI_FACE_ID", "")
 

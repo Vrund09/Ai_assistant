@@ -248,6 +248,12 @@ if (window.speechSynthesis) {
 var simliPC = null;
 var simliWS = null;
 var simliToken = null;
+var simliConfig = null;          // cached so we can reconnect
+var simliConnecting = false;     // guard against overlapping connect attempts
+var simliReconnectTimer = null;  // pending reconnect
+var simliKeepaliveTimer = null;  // periodic silence to prevent idle timeout
+var simliReconnectAttempts = 0;  // for backoff / giving up gracefully
+var SIMLI_MAX_RECONNECTS = 6;
 
 async function initSimli() {
     try {
@@ -256,6 +262,7 @@ async function initSimli() {
         var config = await resp.json();
         if (!config.apiKey || !config.faceId) return;
 
+        simliConfig = config;    // remember for reconnects
         state.simliReady = true;
         elements.avatarStatus.textContent = 'Avatar ready';
         console.log('Simli configured');
@@ -267,7 +274,54 @@ async function initSimli() {
     }
 }
 
+// Send a tiny silence buffer every 15s so Simli's idle timer (maxIdleTime)
+// never expires and drops the session between questions during a demo.
+function startSimliKeepalive() {
+    stopSimliKeepalive();
+    simliKeepaliveTimer = setInterval(function () {
+        if (state.isSpeaking) return; // don't interfere while real audio streams
+        if (simliWS && simliWS.readyState === WebSocket.OPEN) {
+            try { simliWS.send(new Uint8Array(2000)); } catch (e) { /* ignore */ }
+        }
+    }, 15000);
+}
+
+function stopSimliKeepalive() {
+    if (simliKeepaliveTimer) {
+        clearInterval(simliKeepaliveTimer);
+        simliKeepaliveTimer = null;
+    }
+}
+
+// Tear down the current session and reconnect using the cached config.
+// Debounced + guarded so drops don't trigger a reconnect storm.
+function scheduleSimliReconnect(reason) {
+    if (!simliConfig) return;
+    if (simliConnecting || simliReconnectTimer) return;
+
+    if (simliReconnectAttempts >= SIMLI_MAX_RECONNECTS) {
+        console.log('Simli reconnect gave up after', simliReconnectAttempts, 'attempts');
+        elements.avatarStatus.textContent = 'Voice only';
+        teardownSimli();
+        return;
+    }
+
+    simliReconnectAttempts++;
+    // Backoff: 1.5s, 3s, 4.5s ... capped at 10s.
+    var delay = Math.min(1500 * simliReconnectAttempts, 10000);
+    console.log('Simli reconnect', simliReconnectAttempts, 'scheduled (' + reason + ') in', delay, 'ms');
+    elements.avatarStatus.textContent = 'Reconnecting avatar...';
+    teardownSimli();
+
+    simliReconnectTimer = setTimeout(function () {
+        simliReconnectTimer = null;
+        prewarmSimli(simliConfig);
+    }, delay);
+}
+
 async function prewarmSimli(config) {
+    if (simliConnecting) return;
+    simliConnecting = true;
     try {
         // 1. Get ICE servers
         var iceResp = await fetch('https://api.simli.ai/compose/ice', {
@@ -301,9 +355,21 @@ async function prewarmSimli(config) {
                 elements.avatarVideo.srcObject = evt.streams[0];
                 elements.avatarPlaceholder.classList.add('hidden');
                 elements.avatarVideo.style.display = 'block';
+                state.simliReady = true;
+                simliReconnectAttempts = 0; // healthy again → reset backoff
+                elements.avatarStatus.textContent = 'Avatar ready';
                 console.log('Simli video stream connected');
             }
         });
+
+        // Detect a dropped WebRTC connection and reconnect.
+        simliPC.oniceconnectionstatechange = function () {
+            var st = simliPC ? simliPC.iceConnectionState : '';
+            console.log('Simli ICE state:', st);
+            if (st === 'failed' || st === 'disconnected' || st === 'closed') {
+                scheduleSimliReconnect('ice-' + st);
+            }
+        };
 
         simliPC.onicecandidate = function (event) {
             if (event.candidate === null && simliPC.localDescription) {
@@ -324,16 +390,18 @@ async function prewarmSimli(config) {
 
         simliWS.addEventListener('message', async function (evt) {
             if (evt.data === 'START') {
-                // Send silence to keep the connection alive
+                // Send silence to keep the connection alive, then start keepalive
                 setTimeout(function () {
                     if (simliWS && simliWS.readyState === WebSocket.OPEN) {
                         simliWS.send(new Uint8Array(64000));
                     }
                 }, 100);
+                startSimliKeepalive();
                 return;
             }
             if (evt.data === 'STOP') {
-                stopSimli();
+                // Session ended (usually idle timeout) — reconnect instead of dying.
+                scheduleSimliReconnect('server-stop');
                 return;
             }
             try {
@@ -358,6 +426,9 @@ async function prewarmSimli(config) {
 
         simliWS.addEventListener('close', function () {
             console.log('Simli WebSocket closed');
+            stopSimliKeepalive();
+            // Unexpected close while we still have config → reconnect.
+            scheduleSimliReconnect('ws-close');
         });
 
         elements.avatarStatus.textContent = 'Avatar ready';
@@ -366,20 +437,37 @@ async function prewarmSimli(config) {
     } catch (e) {
         console.error('Simli pre-warm error:', e);
         state.simliReady = false;
+        scheduleSimliReconnect('prewarm-error');
+    } finally {
+        simliConnecting = false;
     }
 }
 
-function stopSimli() {
+// Close the peer connection + socket without triggering a reconnect,
+// and show the fallback face. Handlers are detached first so their
+// close/ICE events don't re-enter the reconnect path.
+function teardownSimli() {
+    stopSimliKeepalive();
     if (simliPC) {
-        simliPC.close();
+        simliPC.oniceconnectionstatechange = null;
+        simliPC.onicecandidate = null;
+        try { simliPC.close(); } catch (e) { /* ignore */ }
         simliPC = null;
     }
     if (simliWS) {
-        simliWS.close();
+        simliWS.onmessage = null;
+        simliWS.onopen = null;
+        simliWS.onclose = null;
+        try { simliWS.close(); } catch (e) { /* ignore */ }
         simliWS = null;
     }
+    state.simliReady = false;
     elements.avatarVideo.style.display = 'none';
     elements.avatarPlaceholder.classList.remove('hidden');
+}
+
+function stopSimli() {
+    teardownSimli();
 }
 
 // Simli TTS pipeline — fetches PCM from /api/tts, pipes through WebRTC for lip-sync
@@ -387,6 +475,8 @@ async function speakViaSimli(text) {
     if (!text) return;
 
     if (!simliWS || simliWS.readyState !== WebSocket.OPEN) {
+        // Session dropped silently — kick off a reconnect for the next turn.
+        scheduleSimliReconnect('speak-no-socket');
         return;
     }
 
