@@ -344,3 +344,41 @@ footer {
         font-size: 1rem;
     }
 }
+
+/* Avatar Connection Health Dot */
+.avatar-health {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    z-index: 5;
+    transition: background 0.3s;
+}
+.avatar-health.connected { background: var(--success); }
+.avatar-health.connecting { background: var(--warning); animation: pulse 1s infinite; }
+.avatar-health.disconnected { background: var(--danger); }
+
+/* Play overlay for blocked video autoplay */
+.play-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 15, 19, 0.8);
+    z-index: 10;
+    cursor: pointer;
+}
+
+.play-overlay-content {
+    color: var(--text);
+    font-size: 1.1rem;
+    padding: 12px 24px;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    background: var(--surface);
+    animation: pulse 2s ease-in-out infinite;
+}
+

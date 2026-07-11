@@ -171,12 +171,65 @@ async def health():
     }
 
 
-@app.get("/api/simli-config")
-async def simli_config():
-    from api.config import SIMLI_API_KEY, SIMLI_FACE_ID
-    if not SIMLI_API_KEY:
-        return {"error": "Simli not configured"}
-    return {"apiKey": SIMLI_API_KEY, "faceId": SIMLI_FACE_ID}
+@app.post("/api/simli-session")
+async def create_simli_session():
+    """Create a fresh Simli WebRTC session. API key stays server-side."""
+    from api.config import SIMLI_API_KEY, SIMLI_FACE_ID, MOCK_MODE
+
+    if MOCK_MODE:
+        return {
+            "available": True,
+            "iceServers": [{"urls": "stun:stun.l.google.com:19302"}],
+            "sessionToken": "mock_session_token_123456",
+            "wsUrl": "wss://api.simli.ai/compose/webrtc/p2p?session_token=mock_session_token_123456&enableSFU=true",
+        }
+
+    if not SIMLI_API_KEY or not SIMLI_FACE_ID:
+        return {"error": "Simli not configured", "available": False}
+
+    import httpx
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            # Step 1: Fetch ICE servers
+            ice_resp = await client.get(
+                "https://api.simli.ai/compose/ice",
+                headers={"x-simli-api-key": SIMLI_API_KEY},
+            )
+            if ice_resp.status_code != 200:
+                return {"error": f"ICE fetch failed: {ice_resp.status_code}", "available": False}
+            ice_servers = ice_resp.json()
+
+            # Step 2: Create session token
+            token_resp = await client.post(
+                "https://api.simli.ai/compose/token",
+                headers={
+                    "Content-Type": "application/json",
+                    "x-simli-api-key": SIMLI_API_KEY,
+                },
+                json={
+                    "faceId": SIMLI_FACE_ID,
+                    "handleSilence": True,
+                    "maxSessionLength": 21600,   # 6 hours
+                    "maxIdleTime": 600,           # 10 minutes
+                },
+            )
+            if token_resp.status_code != 200:
+                return {"error": f"Token creation failed: {token_resp.status_code}", "available": False}
+            token_data = token_resp.json()
+        except Exception as e:
+            return {"error": f"Simli connection failed: {str(e)}", "available": False}
+
+    return {
+        "available": True,
+        "iceServers": ice_servers,
+        "sessionToken": token_data["session_token"],
+        "wsUrl": (
+            "wss://api.simli.ai/compose/webrtc/p2p"
+            f"?session_token={token_data['session_token']}"
+            "&enableSFU=true"
+        ),
+    }
+
 
 
 @app.get("/api/tts")
@@ -212,469 +265,11 @@ else:
     if _pf.is_dir():
         app.mount("/", StaticFiles(directory=str(_pf.resolve()), html=True), name="static")
     else:
-        # Last resort: serve inline HTML
         @app.get("/")
         async def root():
             from fastapi.responses import HTMLResponse
-            return HTMLResponse(content=r"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Voice Avatar Assistant</title>
-<style>
-:root{--bg:#0f0f13;--surface:#1a1a24;--border:#2a2a3a;--text:#e4e4e7;--text-muted:#71717a;--accent:#7c3aed;--danger:#ef4444;--success:#22c55e;--radius:12px}
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;justify-content:center;align-items:center;padding:16px}
-.container{width:100%;max-width:600px;display:flex;flex-direction:column;gap:16px}
-h1{font-size:1.5rem;text-align:center}
-.subtitle{color:var(--text-muted);font-size:.875rem;text-align:center}
-.avatar-container{position:relative;width:100%;aspect-ratio:4/3;background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);overflow:hidden;display:flex;align-items:center;justify-content:center}
-.avatar-container video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none}
-.avatar-container video.show{display:block}
-.avatar-container svg{position:absolute;top:0;left:0}
-.avatar-container svg.hidden{display:none}
-.avatar-status{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);background:rgba(26,26,36,.85);padding:4px 14px;border-radius:20px;font-size:.8rem;color:var(--text-muted);z-index:2}
-.status-bar{display:flex;align-items:center;gap:8px;padding:10px 16px;background:var(--surface);border-radius:var(--radius);border:1px solid var(--border)}
-.status-dot{width:8px;height:8px;border-radius:50%;background:var(--text-muted);transition:background .2s}
-.status-dot.listening{background:var(--accent);animation:pulse 1s infinite}
-.status-dot.thinking{background:#f59e0b;animation:pulse .6s infinite}
-.status-dot.speaking{background:var(--success)}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
-.status-text{font-size:.875rem;color:var(--text-muted)}
-.status-text.active{color:var(--text)}
-.conversation{display:flex;flex-direction:column;gap:8px;max-height:200px;overflow-y:auto}
-.message{padding:10px 14px;border-radius:var(--radius);font-size:.875rem;animation:fadeIn .3s}
-.message.user{background:var(--accent);color:#fff;align-self:flex-end;max-width:80%}
-.message.assistant{background:var(--surface);color:var(--text);align-self:flex-start;max-width:80%;border:1px solid var(--border)}
-.message.blocked{border-color:var(--danger);color:var(--danger)}
-@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
-.controls{margin-top:8px}
-input[type=text]{width:100%;padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.9375rem;outline:none}
-input[type=text]:focus{border-color:var(--accent)}
-input[type=text]::placeholder{color:var(--text-muted)}
-.btn-row{display:flex;gap:8px;margin-top:8px}
-.btn{padding:10px 20px;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);font-size:.9375rem;cursor:pointer}
-.btn:hover{opacity:.9}
-.btn-sec{background:var(--surface);border:1px solid var(--border);color:var(--text)}
-footer{text-align:center;color:var(--text-muted);font-size:.75rem;margin-top:8px}
-.toast{position:fixed;bottom:20px;right:20px;padding:12px 20px;border-radius:var(--radius);background:var(--surface);border:1px solid var(--danger);color:var(--danger);font-size:.875rem;z-index:1000;animation:fadeIn .3s}
-video{background:var(--surface)}
-</style>
-</head>
-<body>
-<div class="container">
-<h1>🎙️ Voice Avatar Assistant</h1>
-<p class="subtitle">Ask me anything — I'll speak the answer</p>
-
-<div class="avatar-container" id="avatarContainer">
-<video id="simliVideo" autoplay playsinline></video>
-<svg id="faceSVG" viewBox="0 0 200 200" width="100%" height="100%">
-<circle cx="100" cy="100" r="80" fill="#2d2d3d" stroke="#7c3aed" stroke-width="2"/>
-<circle cx="75" cy="85" r="8" fill="#e4e4e7"/><circle cx="77" cy="85" r="4" fill="#0f0f13"/>
-<circle cx="125" cy="85" r="8" fill="#e4e4e7"/><circle cx="127" cy="85" r="4" fill="#0f0f13"/>
-<path id="mouth" d="M 75 130 Q 100 140 125 130" stroke="#e4e4e7" stroke-width="3" fill="none" stroke-linecap="round"/>
-</svg>
-<div class="avatar-status" id="avatarStatus">Connecting...</div>
-</div>
-
-<div class="status-bar">
-<span class="status-dot" id="statusDot"></span>
-<span class="status-text" id="statusText">Initializing...</span>
-</div>
-
-<div class="conversation" id="conversation"></div>
-
-<div class="controls">
-<input type="text" id="msg" placeholder="Type your question here..." maxlength="500" autofocus>
-<div class="btn-row">
-<button class="btn" onclick="send()">Send</button>
-<button class="btn btn-sec" id="micBtn" onmousedown="startMic(event)" onmouseup="stopMic()" onmouseleave="stopMic()" ontouchstart="startMic(event)" ontouchend="stopMic()">🎤 Hold to talk</button>
-</div>
-</div>
-
-<footer>Groq + Simli + Open-Meteo + edge-tts</footer>
-</div>
-
-<script>
-// ============================================================
-// Simli WebRTC Avatar — connects on page load
-// ============================================================
-var simliPC = null;
-var simliWS = null;
-var simliReady = false;
-var simliReconnectTimer = null;
-var simliKeepaliveTimer = null;
-var simliReconnectAttempts = 0;
-var SIMLI_MAX_RECONNECTS = 6;
-
-// Keepalive: send silence every 15s so Simli's idle timer never drops the
-// session between questions during a demo.
-function startSimliKeepalive() {
-    if (simliKeepaliveTimer) clearInterval(simliKeepaliveTimer);
-    simliKeepaliveTimer = setInterval(function() {
-        if (isSpeaking) return;
-        if (simliWS && simliWS.readyState === WebSocket.OPEN) {
-            try { simliWS.send(new Uint8Array(2000)); } catch(e) {}
-        }
-    }, 15000);
-}
-
-function teardownSimli() {
-    if (simliKeepaliveTimer) { clearInterval(simliKeepaliveTimer); simliKeepaliveTimer = null; }
-    if (simliPC) { try { simliPC.oniceconnectionstatechange = null; simliPC.close(); } catch(e) {} simliPC = null; }
-    if (simliWS) { try { simliWS.onclose = null; simliWS.close(); } catch(e) {} simliWS = null; }
-    simliReady = false;
-    document.getElementById('simliVideo').classList.remove('show');
-    document.getElementById('faceSVG').classList.remove('hidden');
-}
-
-// Recover from a dropped session (idle STOP / WS close / ICE failure) instead
-// of falling back to voice-only permanently. Backoff + cap avoid a retry storm.
-function scheduleSimliReconnect(reason) {
-    if (simliReconnectTimer) return;
-    if (simliReconnectAttempts >= SIMLI_MAX_RECONNECTS) {
-        document.getElementById('avatarStatus').textContent = 'Voice only';
-        teardownSimli();
-        return;
-    }
-    simliReconnectAttempts++;
-    var delay = Math.min(1500 * simliReconnectAttempts, 10000);
-    console.log('Simli reconnect', simliReconnectAttempts, '(' + reason + ') in', delay, 'ms');
-    document.getElementById('avatarStatus').textContent = 'Reconnecting...';
-    teardownSimli();
-    simliReconnectTimer = setTimeout(function() {
-        simliReconnectTimer = null;
-        initSimli();
-    }, delay);
-}
-
-async function initSimli() {
-    try {
-        var resp = await fetch('/api/simli-config');
-        if (!resp.ok) { throw new Error('No Simli config'); }
-        var cfg = await resp.json();
-        if (!cfg.apiKey || !cfg.faceId) { throw new Error('Missing keys'); }
-
-        document.getElementById('avatarStatus').textContent = 'Starting avatar...';
-
-        // Step 1: Get ICE servers
-        var iceResp = await fetch('https://api.simli.ai/compose/ice', {
-            headers: { 'x-simli-api-key': cfg.apiKey }
-        });
-        if (!iceResp.ok) throw new Error('ICE servers failed');
-        var iceServers = await iceResp.json();
-
-        // Step 2: Get session token
-        var tokenResp = await fetch('https://api.simli.ai/compose/token', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'x-simli-api-key': cfg.apiKey
-            },
-            body: JSON.stringify({
-                faceId: cfg.faceId,
-                handleSilence: true,
-                maxSessionLength: 3600,
-                maxIdleTime: 300
-            })
-        });
-        if (!tokenResp.ok) throw new Error('Token failed: ' + tokenResp.status);
-        var tokenData = await tokenResp.json();
-
-        // Step 3: Create RTCPeerConnection
-        simliPC = new RTCPeerConnection({ iceServers: iceServers });
-
-        simliPC.addEventListener('track', function(evt) {
-            if (evt.track.kind === 'video') {
-                var vid = document.getElementById('simliVideo');
-                vid.srcObject = evt.streams[0];
-                vid.classList.add('show');
-                document.getElementById('faceSVG').classList.add('hidden');
-                document.getElementById('avatarStatus').textContent = 'Ready';
-                simliReady = true;
-                simliReconnectAttempts = 0;
-                console.log('Simli video connected');
-            }
-        });
-
-        simliPC.oniceconnectionstatechange = function() {
-            var st = simliPC ? simliPC.iceConnectionState : '';
-            console.log('ICE state:', st);
-            if (st === 'failed' || st === 'disconnected' || st === 'closed') {
-                scheduleSimliReconnect('ice-' + st);
-            }
-        };
-
-        // Step 4: Open WebSocket for signaling
-        var wsUrl = 'wss://api.simli.ai/compose/webrtc/p2p?session_token=' +
-            tokenData.session_token + '&enableSFU=true';
-        simliWS = new WebSocket(wsUrl);
-
-        var offerSent = false;
-        simliPC.onicecandidate = function(event) {
-            if (event.candidate === null && simliPC.localDescription && !offerSent) {
-                offerSent = true;
-                if (simliWS.readyState === WebSocket.OPEN) {
-                    simliWS.send(JSON.stringify({
-                        sdp: simliPC.localDescription.sdp,
-                        type: simliPC.localDescription.type
-                    }));
-                }
-            }
-        };
-
-        simliWS.addEventListener('open', function() {
-            console.log('Simli WS open, starting negotiation');
-            simliPC.addTransceiver('audio', { direction: 'recvonly' });
-            simliPC.addTransceiver('video', { direction: 'recvonly' });
-            simliPC.createOffer()
-                .then(function(offer) { return simliPC.setLocalDescription(offer); })
-                .catch(function(e) { console.error('Offer error:', e); });
-        });
-
-        simliWS.addEventListener('message', async function(evt) {
-            if (evt.data === 'START') {
-                setTimeout(function() {
-                    if (simliWS && simliWS.readyState === WebSocket.OPEN) {
-                        simliWS.send(new Uint8Array(64000));
-                    }
-                }, 100);
-                startSimliKeepalive();
-                return;
-            }
-            if (evt.data === 'STOP') { scheduleSimliReconnect('server-stop'); return; }
-            try {
-                var msg = JSON.parse(evt.data);
-                if (msg.type === 'answer' && msg.sdp && simliPC) {
-                    await simliPC.setRemoteDescription(msg);
-                    console.log('Simli remote set');
-                }
-            } catch(e) {}
-        });
-
-        simliWS.addEventListener('close', function() {
-            console.log('Simli WS closed');
-            if (simliKeepaliveTimer) { clearInterval(simliKeepaliveTimer); simliKeepaliveTimer = null; }
-            scheduleSimliReconnect('ws-close');
-        });
-
-    } catch(e) {
-        console.log('Simli init failed:', e.message);
-        document.getElementById('avatarStatus').textContent = 'SVG mode';
-        document.getElementById('statusText').textContent = 'Waiting for your question...';
-    }
-}
-
-// ============================================================
-// Browser TTS + animated mouth
-// ============================================================
-var isSpeaking = false;
-var mouthAnim = false;
-var mouthFrame = null;
-var recognition = null;
-var speechReady = false;
-
-function setStatus(s, msg) {
-    var d = document.getElementById('statusDot');
-    var t = document.getElementById('statusText');
-    d.className = 'status-dot';
-    t.className = 'status-text';
-    if (s === 'thinking') { d.classList.add('thinking'); t.classList.add('active'); }
-    else if (s === 'speaking') { d.classList.add('speaking'); t.classList.add('active'); }
-    if (msg) t.textContent = msg;
-}
-
-function addMsg(text, role) {
-    var el = document.createElement('div');
-    el.className = 'message ' + role;
-    el.textContent = text;
-    var c = document.getElementById('conversation');
-    c.appendChild(el);
-    c.scrollTop = c.scrollHeight;
-}
-
-function animateMouth(speaking) {
-    var m = document.getElementById('mouth');
-    if (!m) return;
-    if (speaking && !mouthAnim) {
-        mouthAnim = true;
-        var intensity = 0, dir = 1;
-        (function pulse() {
-            if (!mouthAnim) return;
-            intensity += dir * 0.1;
-            if (intensity > 1) { intensity = 1; dir = -1; }
-            if (intensity < 0) { intensity = 0; dir = 1; }
-            var open = 8 + intensity * 13;
-            m.setAttribute('d', 'M 75 130 Q 100 ' + (130 + open) + ' 125 130');
-            mouthFrame = requestAnimationFrame(pulse);
-        })();
-    } else if (!speaking && mouthAnim) {
-        mouthAnim = false;
-        if (mouthFrame) cancelAnimationFrame(mouthFrame);
-        m.setAttribute('d', 'M 75 130 Q 100 140 125 130');
-    }
-}
-
-// Load voices
-if (window.speechSynthesis) {
-    window.speechSynthesis.getVoices();
-    window.speechSynthesis.onvoiceschanged = function() { window.speechSynthesis.getVoices(); };
-}
-
-function speak(text) {
-    if (!text || isSpeaking) return;
-    window.speechSynthesis.cancel();
-    isSpeaking = true;
-    setStatus('speaking', 'Speaking...');
-    animateMouth(true);
-    var u = new SpeechSynthesisUtterance(text);
-    u.lang = 'en-US';
-    u.rate = 1.0;
-    u.pitch = 1.1;
-    // Pick female voice
-    var voices = window.speechSynthesis.getVoices();
-    var female = voices.find(function(v){ return v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('woman') || v.name.includes('Zira') || v.name.includes('Samantha') || v.name.includes('Karen'); });
-    if (!female) female = voices.find(function(v){ return v.lang.startsWith('en') && v.name.toLowerCase().includes('google'); });
-    if (!female) female = voices.find(function(v){ return v.lang.startsWith('en'); });
-    if (female) u.voice = female;
-    u.onend = function() { isSpeaking = false; animateMouth(false); setStatus('idle', 'Waiting...'); };
-    u.onerror = function() { isSpeaking = false; animateMouth(false); setStatus('idle', 'Waiting...'); };
-    window.speechSynthesis.speak(u);
-}
-
-async function send() {
-    var m = document.getElementById('msg').value.trim();
-    if (!m || isSpeaking) return;
-    setStatus('thinking', 'Thinking...');
-    addMsg(m, 'user');
-    document.getElementById('msg').value = '';
-    try {
-        var r = await fetch('/api/chat', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})});
-        var d = await r.json();
-        var cls = d.blocked ? 'assistant blocked' : 'assistant';
-        addMsg(d.reply, cls);
-        if (d.blocked) {
-            speakBrowser(d.reply);
-            var tst = document.createElement('div'); tst.className = 'toast'; tst.textContent = 'Blocked by safety filter'; document.body.appendChild(tst);
-            setTimeout(function(){ tst.remove(); }, 4000);
-        } else {
-            // Run BOTH: browser TTS (audible) + Simli PCM (lip-sync)
-            speakBrowser(d.reply);
-            if (simliReady && simliWS && simliWS.readyState === WebSocket.OPEN) {
-                speakSimli(d.reply);
-            } else {
-                scheduleSimliReconnect('speak-not-ready');
-            }
-        }
-    } catch(e) {
-        addMsg("Sorry, couldn't get an answer.", 'assistant');
-        setStatus('idle', 'Waiting...');
-    }
-}
-
-// Browser TTS (fallback) — female voice
-function speakBrowser(text) {
-    if (!text || isSpeaking) return;
-    window.speechSynthesis.cancel();
-    isSpeaking = true;
-    setStatus('speaking', 'Speaking...');
-    animateMouth(true);
-    var u = new SpeechSynthesisUtterance(text);
-    u.lang = 'en-US';
-    u.rate = 1.0;
-    u.pitch = 1.1;
-    var voices = window.speechSynthesis.getVoices();
-    var female = voices.find(function(v){ var n = v.name.toLowerCase(); return n.includes('female') || n.includes('zira') || n.includes('samantha') || n.includes('karen'); });
-    if (!female) female = voices.find(function(v){ return v.lang.startsWith('en'); });
-    if (female) u.voice = female;
-    u.onend = function() { isSpeaking = false; animateMouth(false); setStatus('idle', 'Waiting...'); };
-    u.onerror = function() { isSpeaking = false; animateMouth(false); setStatus('idle', 'Waiting...'); };
-    window.speechSynthesis.speak(u);
-}
-
-// Simli TTS — runs in parallel with browser TTS for lip-sync only
-async function speakSimli(text) {
-    if (!text) return;
-    // No isSpeaking guard — runs independently alongside browser TTS
-    try {
-        var resp = await fetch('/api/tts?text=' + encodeURIComponent(text));
-        if (!resp.ok) throw new Error('TTS failed');
-        var mp3Buf = await resp.arrayBuffer();
-        if (!mp3Buf || mp3Buf.byteLength === 0) throw new Error('Empty');
-
-        // Decode MP3 → PCM 16kHz mono via Web Audio API
-        var actx = new (window.AudioContext || window.webkitAudioContext)();
-        var decoded = await actx.decodeAudioData(mp3Buf);
-        var sr = 16000, len = Math.ceil(decoded.duration * sr);
-        var offline = new OfflineAudioContext(1, len, sr);
-        var src = offline.createBufferSource();
-        src.buffer = decoded; src.connect(offline.destination); src.start();
-        var rendered = await offline.startRendering();
-        var channel = rendered.getChannelData(0);
-        var pcm16 = new Int16Array(channel.length);
-        for (var i = 0; i < channel.length; i++) pcm16[i] = Math.max(-32768, Math.min(32767, Math.round(channel[i] * 32767)));
-        var pcmBytes = new Uint8Array(pcm16.buffer);
-        console.log('PCM for Simli:', pcmBytes.length, 'bytes');
-
-        var chunkSize = 6000;
-        for (var i = 0; i < pcmBytes.length; i += chunkSize) {
-            if (simliWS && simliWS.readyState === WebSocket.OPEN) simliWS.send(pcmBytes.slice(i, i + chunkSize));
-            await new Promise(function(r) { setTimeout(r, 20); });
-        }
-        var dur = (pcm16.length / sr) * 1000 + 300;
-        setTimeout(function() {
-            // Only clear isSpeaking if browser TTS already finished
-            if (!window.speechSynthesis.speaking) {
-                isSpeaking = false; animateMouth(false); setStatus('idle', 'Waiting...');
-            }
-        }, dur);
-    } catch(e) {
-        console.log('Simli TTS failed:', e.message);
-        // Don't clear isSpeaking — browser TTS may still be running
-    }
-}
-
-document.getElementById('msg').addEventListener('keydown', function(e) { if (e.key === 'Enter') send(); });
-
-var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-if (SR) {
-    speechReady = true;
-    recognition = new SR();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
-    recognition.onresult = function(e) {
-        var final = '';
-        for (var i = e.resultIndex; i < e.results.length; i++) {
-            if (e.results[i].isFinal) final += e.results[i][0].transcript;
-        }
-        if (final) { document.getElementById('msg').value = final; send(); stopMic(); }
-    };
-    recognition.onerror = function(e) {
-        if (e.error === 'not-allowed') alert('Mic denied. Enable in browser settings.');
-        stopMic();
-    };
-}
-
-function startMic(e) { e.preventDefault(); if (speechReady) { try { recognition.start(); } catch(ex){} } document.getElementById('micBtn').textContent = '🔴 Listening...'; document.getElementById('micBtn').style.background = 'var(--accent)'; }
-function stopMic() { if (speechReady) { try { recognition.stop(); } catch(ex){} } document.getElementById('micBtn').textContent = '🎤 Hold to talk'; document.getElementById('micBtn').style.background = ''; }
-
-// ============================================================
-// Init: load Simli, then fall back to SVG + health check
-// ============================================================
-initSimli();
-setTimeout(function() {
-    if (!simliReady) {
-        document.getElementById('statusText').textContent = 'Waiting for your question...';
-        document.getElementById('avatarStatus').textContent = 'SVG mode';
-    }
-}, 8000);
-
-fetch('/api/health').then(function(r){ return r.json(); }).then(function(d){
-    console.log('Health:', d.status);
-});
-</script>
-</body>
-</html>""")
-
+            return HTMLResponse(content="""<!DOCTYPE html>
+<html><head><title>Voice Avatar Assistant</title></head>
+<body style="background:#0f0f13;color:#e4e4e7;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh">
+<div><h1>Setup Required</h1><p>The public/ directory was not found. Deploy with Vercel or serve locally.</p></div>
+</body></html>""")
