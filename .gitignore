@@ -39,5 +39,12 @@ htmlcov/
 # CommandCode
 .commandcode/
 
+# Redundant with runtime.txt (Vercel)
+.python-version
+
+# Using pip/requirements.txt, not uv
+pyproject.toml
+uv.lock
+
 # Report source kept local only (PDF is committed instead)
 report.html

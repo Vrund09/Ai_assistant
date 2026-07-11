@@ -4,9 +4,9 @@
  * conversation history, animated avatar, and Simli WebRTC integration.
  */
 
-const API_BASE = '/api';
+var API_BASE = '/api';
 
-const state = {
+var state = {
     isRecording: false,
     recognition: null,
     speechSupported: false,
@@ -15,9 +15,9 @@ const state = {
     isSpeaking: false,
 };
 
-const $ = (sel) => document.querySelector(sel);
+var $ = function (sel) { return document.querySelector(sel); };
 
-const elements = {
+var elements = {
     textInput: $('#textInput'),
     sendBtn: $('#sendBtn'),
     micBtn: $('#micBtn'),
@@ -35,13 +35,15 @@ const elements = {
     avatarHealth: $('#avatarHealth'),
 };
 
+var SIMLI_MAX_RECONNECTS = 3;
+
 // =========================================================================
 // Toast helper
 // =========================================================================
 
 function showToast(message, type) {
     type = type || 'info';
-    const toast = document.createElement('div');
+    var toast = document.createElement('div');
     toast.className = 'toast ' + type;
     toast.textContent = message;
     elements.toastContainer.appendChild(toast);
@@ -92,7 +94,6 @@ function addMessage(text, role) {
 // Animated Avatar Face (always works, no API needed)
 // =========================================================================
 
-// Pre-draw the avatar face as an SVG with animatable mouth
 var avatarSVG = null;
 var mouthPath = null;
 var mouthAnimating = false;
@@ -110,7 +111,6 @@ function initAvatarFace() {
     avatarSVG.style.top = '0';
     avatarSVG.style.left = '0';
 
-    // Face circle
     var face = document.createElementNS(ns, 'circle');
     face.setAttribute('cx', '100');
     face.setAttribute('cy', '100');
@@ -120,7 +120,6 @@ function initAvatarFace() {
     face.setAttribute('stroke-width', '2');
     avatarSVG.appendChild(face);
 
-    // Left eye
     var leftEye = document.createElementNS(ns, 'circle');
     leftEye.setAttribute('cx', '75');
     leftEye.setAttribute('cy', '85');
@@ -128,7 +127,6 @@ function initAvatarFace() {
     leftEye.setAttribute('fill', '#e4e4e7');
     avatarSVG.appendChild(leftEye);
 
-    // Left pupil
     var leftPupil = document.createElementNS(ns, 'circle');
     leftPupil.setAttribute('cx', '77');
     leftPupil.setAttribute('cy', '85');
@@ -136,7 +134,6 @@ function initAvatarFace() {
     leftPupil.setAttribute('fill', '#0f0f13');
     avatarSVG.appendChild(leftPupil);
 
-    // Right eye
     var rightEye = document.createElementNS(ns, 'circle');
     rightEye.setAttribute('cx', '125');
     rightEye.setAttribute('cy', '85');
@@ -144,7 +141,6 @@ function initAvatarFace() {
     rightEye.setAttribute('fill', '#e4e4e7');
     avatarSVG.appendChild(rightEye);
 
-    // Right pupil
     var rightPupil = document.createElementNS(ns, 'circle');
     rightPupil.setAttribute('cx', '127');
     rightPupil.setAttribute('cy', '85');
@@ -152,7 +148,6 @@ function initAvatarFace() {
     rightPupil.setAttribute('fill', '#0f0f13');
     avatarSVG.appendChild(rightPupil);
 
-    // Mouth
     mouthPath = document.createElementNS(ns, 'path');
     mouthPath.setAttribute('d', 'M 75 130 Q 100 145 125 130');
     mouthPath.setAttribute('stroke', '#e4e4e7');
@@ -204,13 +199,13 @@ function getAudioContext() {
 }
 
 function showPlayOverlay() {
-    if ($('#playOverlay')) return; // already shown
+    if ($('#playOverlay')) return;
     var overlay = document.createElement('div');
     overlay.id = 'playOverlay';
     overlay.className = 'play-overlay';
     overlay.innerHTML = '<div class="play-overlay-content">Tap to start avatar</div>';
     overlay.addEventListener('click', function () {
-        elements.avatarVideo.play().catch(function(err){
+        elements.avatarVideo.play().catch(function (err) {
             console.log('Explicit play failed on overlay click:', err.message);
         });
         overlay.remove();
@@ -224,13 +219,12 @@ function unlockAudio() {
     if (ctx.state === 'suspended') {
         ctx.resume();
     }
-    // Also trigger video play if it was blocked
     if (needsPlayOnGesture && elements.avatarVideo.srcObject) {
-        elements.avatarVideo.play().then(function() {
+        elements.avatarVideo.play().then(function () {
             needsPlayOnGesture = false;
             var overlay = $('#playOverlay');
             if (overlay) overlay.remove();
-        }).catch(function(e){
+        }).catch(function (e) {
             console.log('Unlock audio gesture play failed:', e.message);
         });
     }
@@ -249,7 +243,6 @@ function speakText(text) {
         window.speechSynthesis.resume();
     }
 
-    // Cancel any ongoing speech
     window.speechSynthesis.cancel();
 
     state.isSpeaking = true;
@@ -261,7 +254,6 @@ function speakText(text) {
     utterance.rate = 1.0;
     utterance.pitch = 1.1;
 
-    // Pick a female voice
     var voices = window.speechSynthesis.getVoices();
     var preferred = voices.find(function (v) {
         var n = v.name.toLowerCase();
@@ -290,7 +282,6 @@ function speakText(text) {
     window.speechSynthesis.speak(utterance);
 }
 
-// Preload voices (some browsers need this)
 if (window.speechSynthesis) {
     window.speechSynthesis.getVoices();
     window.speechSynthesis.onvoiceschanged = function () {
@@ -298,19 +289,18 @@ if (window.speechSynthesis) {
     };
 }
 
-
 // =========================================================================
 // Simli WebRTC Avatar (premium, requires API key)
 // =========================================================================
 
 var simliPC = null;
 var simliWS = null;
-var simliAvailable = false;      // Flag: Simli is configured (can always reconnect)
-var simliConnecting = false;     // guard against overlapping connect attempts
-var simliReconnectTimer = null;  // pending reconnect
-var simliKeepaliveTimer = null;  // periodic silence to prevent idle timeout
-var simliReconnectAttempts = 0;  // for backoff / giving up
-var simliSendingPCM = false;     // guard against race conditions
+var simliConfigured = false;
+var simliConnecting = false;
+var simliReconnectTimer = null;
+var simliKeepaliveTimer = null;
+var simliReconnectAttempts = 0;
+var simliSendingPCM = false;
 
 function setAvatarHealth(status) {
     if (elements.avatarHealth) {
@@ -318,42 +308,81 @@ function setAvatarHealth(status) {
     }
 }
 
-async function initSimli() {
+async function checkSimliAvailable() {
     try {
-        elements.avatarStatus.textContent = 'Loading avatar...';
-        setAvatarHealth('connecting');
-
-        var resp = await fetch(API_BASE + '/simli-session', { method: 'POST' });
+        var resp = await fetch(API_BASE + '/simli-status');
         if (!resp.ok) {
+            simliConfigured = false;
             elements.avatarStatus.textContent = 'Voice mode';
-            setAvatarHealth('disconnected');
             return;
         }
-        var session = await resp.json();
-        if (!session.available) {
-            console.log('Simli not available:', session.error);
+        var data = await resp.json();
+        simliConfigured = data.configured;
+        if (simliConfigured) {
+            elements.avatarStatus.textContent = 'Ready — avatar activates on first message';
+        } else {
             elements.avatarStatus.textContent = 'Voice mode';
-            setAvatarHealth('disconnected');
-            return;
         }
-
-        simliAvailable = true;
-        elements.avatarStatus.textContent = 'Connecting...';
-        await connectSimliWebRTC(session);
     } catch (e) {
-        console.log('Simli init failed:', e.message);
+        simliConfigured = false;
         elements.avatarStatus.textContent = 'Voice mode';
-        setAvatarHealth('disconnected');
-        scheduleSimliReconnect('init-error');
     }
 }
 
-// Send a tiny silence buffer every 15s so Simli's idle timer (maxIdleTime)
-// never expires and drops the session between questions.
+// Creates a Simli session just-in-time (called from sendMessage when needed)
+function ensureSimliSession() {
+    return new Promise(function (resolve) {
+        if (state.simliReady && simliWS && simliWS.readyState === WebSocket.OPEN) {
+            resolve(true);
+            return;
+        }
+        if (simliConnecting) {
+            // Wait for ongoing connection attempt
+            var check = setInterval(function () {
+                if (state.simliReady && simliWS && simliWS.readyState === WebSocket.OPEN) {
+                    clearInterval(check);
+                    resolve(true);
+                } else if (!simliConnecting) {
+                    clearInterval(check);
+                    resolve(false);
+                }
+            }, 200);
+            // Timeout after 15s
+            setTimeout(function () { clearInterval(check); resolve(false); }, 15000);
+            return;
+        }
+        if (!simliConfigured) {
+            resolve(false);
+            return;
+        }
+
+        // Start a fresh session
+        elements.avatarStatus.textContent = 'Activating avatar...';
+        freshSimliSession()
+            .then(function () {
+                // Wait up to 15s for video track
+                var waited = 0;
+                var wait = setInterval(function () {
+                    waited += 200;
+                    if (state.simliReady) {
+                        clearInterval(wait);
+                        resolve(true);
+                    } else if (waited >= 15000) {
+                        clearInterval(wait);
+                        resolve(false);
+                    }
+                }, 200);
+            })
+            .catch(function () {
+                resolve(false);
+            });
+    });
+}
+
 function startSimliKeepalive() {
     stopSimliKeepalive();
     simliKeepaliveTimer = setInterval(function () {
-        if (state.isSpeaking) return; // don't interfere while real audio streams
+        if (state.isSpeaking) return;
         if (simliWS && simliWS.readyState === WebSocket.OPEN) {
             try { simliWS.send(new Uint8Array(2000)); } catch (e) { /* ignore */ }
         }
@@ -372,17 +401,15 @@ async function connectSimliWebRTC(session) {
     simliConnecting = true;
     setAvatarHealth('connecting');
     try {
-        // 1. Create RTCPeerConnection with server-provided ICE servers
         simliPC = new RTCPeerConnection({ iceServers: session.iceServers });
 
-        // 2. Track event → show video
         simliPC.addEventListener('track', function (evt) {
             if (evt.track.kind === 'video') {
                 var vid = elements.avatarVideo;
                 vid.srcObject = evt.streams[0];
-                vid.play().then(function() {
+                vid.play().then(function () {
                     console.log('Simli video autoplay succeeded');
-                }).catch(function(e) {
+                }).catch(function (e) {
                     console.log('Video autoplay blocked, will retry on gesture:', e.message);
                     needsPlayOnGesture = true;
                     showPlayOverlay();
@@ -390,14 +417,13 @@ async function connectSimliWebRTC(session) {
                 elements.avatarPlaceholder.classList.add('hidden');
                 vid.style.display = 'block';
                 state.simliReady = true;
-                simliReconnectAttempts = 0;  // healthy → reset backoff
+                simliReconnectAttempts = 0;
                 elements.avatarStatus.textContent = '';
                 setAvatarHealth('connected');
                 console.log('Simli video connected');
             }
         });
 
-        // 3. ICE state monitoring
         simliPC.oniceconnectionstatechange = function () {
             var st = simliPC ? simliPC.iceConnectionState : '';
             console.log('Simli ICE state:', st);
@@ -419,7 +445,6 @@ async function connectSimliWebRTC(session) {
             }
         };
 
-        // 4. WebSocket signaling (using server-provided wsUrl)
         simliWS = new WebSocket(session.wsUrl);
 
         simliWS.addEventListener('message', async function (evt) {
@@ -435,7 +460,6 @@ async function connectSimliWebRTC(session) {
             if (evt.data === 'STOP') {
                 console.log('Simli sent STOP — session expired');
                 teardownSimli();
-                freshSimliSession();  // Fresh token, not reusing old config
                 return;
             }
             try {
@@ -471,15 +495,22 @@ async function connectSimliWebRTC(session) {
 }
 
 function scheduleSimliReconnect(reason) {
-    if (!simliAvailable) return;
+    if (!simliConfigured) return;
     if (simliConnecting || simliReconnectTimer) return;
+
+    if (simliReconnectAttempts >= SIMLI_MAX_RECONNECTS) {
+        console.log('Simli: max reconnects reached, falling back to voice-only');
+        elements.avatarStatus.textContent = 'Voice mode (avatar will retry on next message)';
+        setAvatarHealth('disconnected');
+        teardownSimli();
+        return;
+    }
 
     simliReconnectAttempts++;
 
-    // Exponential backoff: 2s, 4s, 8s, 16s, 30s, 30s, 30s...
-    var delay = Math.min(2000 * Math.pow(2, simliReconnectAttempts - 1), 30000);
+    var delay = Math.min(3000 * simliReconnectAttempts, 15000);
     console.log('Simli reconnect #' + simliReconnectAttempts + ' (' + reason + ') in ' + delay + 'ms');
-    
+
     elements.avatarStatus.textContent = 'Reconnecting...';
     setAvatarHealth('connecting');
     teardownSimli();
@@ -526,16 +557,15 @@ function teardownSimli() {
     setAvatarHealth('disconnected');
 }
 
-function stopSimli() {
+window.addEventListener('beforeunload', function () {
     teardownSimli();
-}
+});
 
 async function speakViaSimli(text) {
     if (!text) return;
-    if (simliSendingPCM) return; // Skip if previous PCM still streaming
+    if (simliSendingPCM) return;
 
     if (!simliWS || simliWS.readyState !== WebSocket.OPEN) {
-        scheduleSimliReconnect('speak-no-socket');
         return;
     }
 
@@ -547,9 +577,14 @@ async function speakViaSimli(text) {
         var mp3Buffer = await resp.arrayBuffer();
         if (!mp3Buffer || mp3Buffer.byteLength === 0) return;
 
-        // Decode MP3 → PCM 16kHz mono via Web Audio API
         var audioCtx = getAudioContext();
-        var audioBuffer = await audioCtx.decodeAudioData(mp3Buffer);
+        var audioBuffer;
+        try {
+            audioBuffer = await audioCtx.decodeAudioData(mp3Buffer.slice(0));
+        } catch (decodeErr) {
+            console.log('MP3 decode failed:', decodeErr.message);
+            return;
+        }
 
         var sampleRate = 16000;
         var length = Math.ceil(audioBuffer.duration * sampleRate);
@@ -567,15 +602,13 @@ async function speakViaSimli(text) {
         }
         var pcmBytes = new Uint8Array(pcmInt16.buffer);
 
-        // Send PCM through Simli WebRTC in chunks
         var chunkSize = 6000;
-        for (var i = 0; i < pcmBytes.length; i += chunkSize) {
+        for (var j = 0; j < pcmBytes.length; j += chunkSize) {
             if (!simliWS || simliWS.readyState !== WebSocket.OPEN) {
-                console.log('WS died mid-send, triggering reconnect');
-                scheduleSimliReconnect('ws-died-mid-send');
-                break; // Stop sending, browser TTS continues as fallback
+                console.log('WS died mid-send, stopping PCM');
+                break;
             }
-            simliWS.send(pcmBytes.slice(i, i + chunkSize));
+            simliWS.send(pcmBytes.slice(j, j + chunkSize));
             await new Promise(function (r) { setTimeout(r, 20); });
         }
     } catch (e) {
@@ -584,11 +617,6 @@ async function speakViaSimli(text) {
         simliSendingPCM = false;
     }
 }
-
-async function speakWithSimli(text) {
-    return speakViaSimli(text);
-}
-
 
 // =========================================================================
 // API call
@@ -623,15 +651,19 @@ async function sendMessage(message) {
             speakText(data.reply);
             showToast('Message blocked by safety filter', 'error');
         } else {
-            // Browser TTS for audible voice + Simli PCM for lip-sync (both run)
+            // Start browser TTS immediately
             speakText(data.reply);
-            if (state.simliReady && simliWS && simliWS.readyState === WebSocket.OPEN) {
+
+            // Lazy-init Simli: only create session when we have a reply to speak
+            if (simliConfigured && !state.simliReady && !simliConnecting) {
+                ensureSimliSession().then(function (ready) {
+                    if (ready && simliWS && simliWS.readyState === WebSocket.OPEN) {
+                        speakViaSimli(data.reply);
+                    }
+                });
+            } else if (state.simliReady && simliWS && simliWS.readyState === WebSocket.OPEN) {
                 speakViaSimli(data.reply);
             }
-        }
-
-        if (!state.simliReady && simliAvailable && !simliConnecting && !simliReconnectTimer) {
-            freshSimliSession();
         }
 
         console.log('Latency: ' + (t1 - t0).toFixed(0) + 'ms');
@@ -776,12 +808,11 @@ elements.textInput.addEventListener('keydown', function (e) {
     }
 });
 
+// Visibility change: just update status, don't auto-reconnect
 document.addEventListener('visibilitychange', function () {
     if (document.hidden) return;
-    // Page is now visible again
-    if (simliAvailable && !state.simliReady && !simliConnecting && !simliReconnectTimer) {
-        console.log('Tab visible + avatar dead → reconnecting');
-        freshSimliSession();
+    if (simliConfigured && !state.simliReady) {
+        elements.avatarStatus.textContent = 'Avatar will reconnect on next message';
     }
 });
 
@@ -792,7 +823,7 @@ document.addEventListener('visibilitychange', function () {
 function init() {
     initAvatarFace();
     initSpeechRecognition();
-    initSimli();
+    checkSimliAvailable();
     console.log('Voice Avatar Assistant ready');
     console.log('Speech recognition:', state.speechSupported ? 'supported' : 'not supported');
 }

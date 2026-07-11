@@ -1,0 +1,10 @@
+# Exclude massive video file from Vercel upload
+Voice Avatar Assistant - Google Chrome 2026-07-10 19-56-07.mp4
+
+# Exclude caches and other non-app resources
+.pytest_cache/
+.commandcode/
+.git/
+__pycache__/
+*.pdf
+report.html

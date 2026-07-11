@@ -7,10 +7,8 @@ Architecture:
 
 import logging
 import time
-import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from api.config import MOCK_MODE, ERROR_MESSAGE, GEMINI_API_KEY
@@ -209,8 +207,8 @@ async def create_simli_session():
                 json={
                     "faceId": SIMLI_FACE_ID,
                     "handleSilence": True,
-                    "maxSessionLength": 21600,   # 6 hours
-                    "maxIdleTime": 600,           # 10 minutes
+                    "maxSessionLength": 3600,    # 1 hour
+                    "maxIdleTime": 120,          # 2 minutes
                 },
             )
             if token_resp.status_code != 200:
@@ -253,30 +251,8 @@ async def tts_endpoint(text: str = "", voice: str = "en-US-JennyNeural"):
     return Response(content=mp3, media_type="audio/mpeg")
 
 
-# Mount static frontend (serve public/ directory)
-possible_paths = [
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "public"),
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "public"),
-    os.path.join(os.getcwd(), "public"),
-    os.path.join(os.getcwd(), "..", "public"),
-]
-
-public_dir = None
-for path in possible_paths:
-    if os.path.isdir(path):
-        public_dir = path
-        logger.info("Found public directory at %s", path)
-        break
-
-if public_dir:
-    app.mount("/", StaticFiles(directory=public_dir, html=True), name="static")
-else:
-    logger.error("public/ directory not found in any of the expected paths: %s", possible_paths)
-    @app.get("/")
-    async def root():
-        from fastapi.responses import HTMLResponse
-        return HTMLResponse(content="""<!DOCTYPE html>
-<html><head><title>Voice Avatar Assistant</title></head>
-<body style="background:#0f0f13;color:#e4e4e7;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh">
-<div><h1>Setup Required</h1><p>The public/ directory was not found. Deploy with Vercel or serve locally.</p></div>
-</body></html>""")
+@app.get("/api/simli-status")
+async def simli_status():
+    """Check if Simli is configured (no session created)."""
+    from api.config import SIMLI_API_KEY, SIMLI_FACE_ID
+    return {"configured": bool(SIMLI_API_KEY and SIMLI_FACE_ID)}
