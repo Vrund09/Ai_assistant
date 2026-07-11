@@ -254,21 +254,28 @@ async def tts_endpoint(text: str = "", voice: str = "en-US-JennyNeural"):
 
 
 # Mount static frontend (serve public/ directory)
-public_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "public")
-if os.path.isdir(public_dir):
+possible_paths = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "public"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "public"),
+    os.path.join(os.getcwd(), "public"),
+    os.path.join(os.getcwd(), "..", "public"),
+]
+
+public_dir = None
+for path in possible_paths:
+    if os.path.isdir(path):
+        public_dir = path
+        logger.info("Found public directory at %s", path)
+        break
+
+if public_dir:
     app.mount("/", StaticFiles(directory=public_dir, html=True), name="static")
 else:
-    # Fallback: serve index.html inline if public/ directory not found
-    import pathlib
-    _pf = pathlib.Path(__file__).parent / ".." / "public"
-    logger.warning("public/ directory not found at %s, trying %s", public_dir, _pf.resolve())
-    if _pf.is_dir():
-        app.mount("/", StaticFiles(directory=str(_pf.resolve()), html=True), name="static")
-    else:
-        @app.get("/")
-        async def root():
-            from fastapi.responses import HTMLResponse
-            return HTMLResponse(content="""<!DOCTYPE html>
+    logger.error("public/ directory not found in any of the expected paths: %s", possible_paths)
+    @app.get("/")
+    async def root():
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(content="""<!DOCTYPE html>
 <html><head><title>Voice Avatar Assistant</title></head>
 <body style="background:#0f0f13;color:#e4e4e7;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh">
 <div><h1>Setup Required</h1><p>The public/ directory was not found. Deploy with Vercel or serve locally.</p></div>
